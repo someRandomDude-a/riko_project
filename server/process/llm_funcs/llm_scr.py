@@ -9,7 +9,8 @@ from openai import OpenAI
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
 
-client = OpenAI(api_key=char_config['OPENAI_API_KEY'])
+client = OpenAI(api_key=char_config['OPENAI_API_KEY'] , base_url=char_config['base_url']
+                )
 
 # Constants
 HISTORY_FILE = char_config['history_file']
@@ -45,8 +46,8 @@ def get_riko_response_no_tool(messages):
     response = client.responses.create(
         model=MODEL,
         input= messages,
-        temperature=1,
-        top_p=1,
+        temperature=0.6,
+        top_p=0.8,
         max_output_tokens=2048,
         stream=False,
         text={
@@ -73,7 +74,7 @@ def llm_response(user_input):
 
 
     riko_test_response = get_riko_response_no_tool(messages)
-
+    print("\n\nRiko Response: ", messages, "\n\n")
 
     # just append assistant message to regular response. 
     messages.append({

@@ -1,8 +1,5 @@
 # Project Riko
 
-Project Riko is a anime focused LLM project by Just Rayen. She listens, and remembers your conversations. It combines OpenAI’s GPT, GPT-SoVITS voice synthesis, and Faster-Whisper ASR into a fully configurable conversational pipeline.
-
-**tested with python 3.10 Windows >10 and Linux Ubuntu**
 ## ✨ Features
 
 - 💬 **LLM-based dialogue** using OpenAI API (configurable system prompts)
@@ -10,7 +7,6 @@ Project Riko is a anime focused LLM project by Just Rayen. She listens, and reme
 - 🔊 **Voice generation** via GPT-SoVITS API
 - 🎧 **Speech recognition** using Faster-Whisper
 - 📁 Clean YAML-based config for personality configuration
-
 
 ## ⚙️ Configuration
 
@@ -37,7 +33,6 @@ sovits_ping_config:
 
 You can define personalities by modiying the config file.
 
-
 ## 🛠️ Setup
 
 ### Install Dependencies
@@ -53,12 +48,11 @@ uv pip install -r requirements.txt
 * CUDA & cuDNN installed correctly (for Faster-Whisper GPU support)
 * `ffmpeg` installed (for audio processing)
 
-
 ## 🧪 Usage
 
-### 1. Launch the GPT-SoVITS API 
+### 1. Launch the GPT-SoVITS API  
 
-### 2. Run the main script:
+### 2. Run the main script  
 
 
 ```bash
@@ -69,11 +63,10 @@ The flow:
 
 1. Riko listens to your voice via microphone (push to talk)
 2. Transcribes it with Faster-Whisper
-3. Passes it to GPT (with history)
+3. Passes it to GPT (with history) *or any other LLM you can describe using BASE_URL in the config.yaml
 4. Generates a response
 5. Synthesizes Riko's voice using GPT-SoVITS
 6. Plays the output back to you
-
 
 ## 📌 TODO / Future Improvements
 
@@ -85,13 +78,7 @@ The flow:
 
 ## 🧑‍🎤 Credits
 
+* Fork of Riko Project by [Ryan](https://github.com/rayenfeng/riko_project)
 * Voice synthesis powered by [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)
 * ASR via [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper)
 * Language model via [OpenAI GPT](https://platform.openai.com)
-
-
-## 📜 License
-
-MIT — feel free to clone, modify, and build your own waifu voice companion.
-
-

@@ -10,6 +10,8 @@ with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
 
 
+
+
 def play_audio(path):
     data, samplerate = sf.read(path)
     sd.play(data, samplerate)

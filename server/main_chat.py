@@ -8,6 +8,7 @@ import time
 ### transcribe audio 
 import uuid
 import soundfile as sf
+import sounddevice as sd
 
 
 def get_wav_duration(path):
@@ -16,7 +17,7 @@ def get_wav_duration(path):
 
 
 print(' \n ========= Starting Chat... ================ \n')
-whisper_model = WhisperModel("base.en", device="cpu", compute_type="float32")
+whisper_model = WhisperModel("distil-large-v3", device="cuda", compute_type="int8_float16")
 
 while True:
 
@@ -30,7 +31,7 @@ while True:
     llm_output = llm_response(user_spoken_text)
 
     tts_read_text = llm_output
-
+    print(llm_output)
     ### file organization 
 
     # 1. Generate a unique filename
