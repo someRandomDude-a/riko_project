@@ -155,14 +155,12 @@ def llm_response(user_input):
             {"type": "input_text", "text": user_input}
         ]
     })
-
-
-    riko_test_response = get_riko_response_no_tool(messages)
+    
     print("\n\nRiko Response: ", messages, "\n\n")
-
+        
     # Send request to LLM
-    riko_response = get_riko_response_no_tool(messages)
-    # print("\nRiko Response:", riko_response.output_text, "\n")
+    riko_test_response = get_riko_response_no_tool(messages)
+
 
     # Save assistant's response
     messages.append({

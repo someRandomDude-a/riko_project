@@ -5,3 +5,5 @@ character_config.yaml
 tempCodeRunnerFile.py
 __pycache__/
 conversation.wav
+memory_store.json
+faiss_index.index
