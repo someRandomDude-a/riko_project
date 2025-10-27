@@ -6,6 +6,8 @@ import json
 import os
 from openai import OpenAI
 
+from process.llm_funcs.Memory_system.long_term_memory import *
+
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
 
@@ -27,7 +29,6 @@ SYSTEM_PROMPT =  [
         }
     ]
 
-<<<<<<< HEAD
 MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']  # Approximate context window limit, adjust for your model
 
 # === Initialize RAG Memory System ===
@@ -52,21 +53,12 @@ def load_history():
             print("[WARN] History file is corrupted. Starting fresh history.")
     return None
 
-=======
-# Load/save chat history
-def load_history():
-    if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, "r") as f:
-            return json.load(f)
-    return SYSTEM_PROMPT
->>>>>>> parent of 1271c77 (Added Hybrid memories)
 
 def save_history(history):
     with open(HISTORY_FILE, "w") as f:
         json.dump(history, f, indent=2)
 
 
-<<<<<<< HEAD
 # === Send old messages to long-term memory ===
 def add_message_to_memory(message_text):
     """Adds a message to long-term memory with default importance."""
@@ -95,12 +87,11 @@ def handle_rolling_window(time_exceeded):
         token_count = sum(len(msg["content"][0]["text"].split()) for msg in history)
         if token_count <= MAX_HISTORY_TOKENS:
             break
-
         # Pop oldest non-system message and store it
         dropped_message = history.pop(1)  # Keep system prompt at index 0
         message_text = dropped_message["content"][0]["text"]
         add_message_to_memory(message_text)
-
+    print("[INFO] Context window managed. Updated history saved.",token_count)
     save_history(history)
 
 
@@ -117,25 +108,15 @@ def get_additional_memory(user_input):
 
 
 # === Core LLM call ===
-=======
-
->>>>>>> parent of 1271c77 (Added Hybrid memories)
 def get_riko_response_no_tool(messages):
 
     # Call OpenAI with system prompt + history
     response = client.responses.create(
         model=MODEL,
-<<<<<<< HEAD
         input=messages,
         temperature= char_config['presets']['default']['model_params']['temperature'],
         top_p= char_config['presets']['default']['model_params']['top_p']  ,
         max_output_tokens= char_config['presets']['default']['model_params']['max_output_tokens'],
-=======
-        input= messages,
-        temperature=0.6,
-        top_p=0.8,
-        max_output_tokens=2048,
->>>>>>> parent of 1271c77 (Added Hybrid memories)
         stream=False,
         text={
             "format": {
@@ -148,7 +129,6 @@ def get_riko_response_no_tool(messages):
 
 
 def llm_response(user_input):
-<<<<<<< HEAD
     """Handles user input, manages context, queries memory, and returns model output."""
 
     handle_rolling_window(time.time())
@@ -169,12 +149,6 @@ def llm_response(user_input):
     if history:
         messages.extend(history)# Load history excluding system prompt
     # Add new user message
-=======
-
-    messages = load_history()
-
-    # Append user message to memory
->>>>>>> parent of 1271c77 (Added Hybrid memories)
     messages.append({
         "role": "user",
         "content": [
@@ -186,31 +160,23 @@ def llm_response(user_input):
     riko_test_response = get_riko_response_no_tool(messages)
     print("\n\nRiko Response: ", messages, "\n\n")
 
-<<<<<<< HEAD
     # Send request to LLM
     riko_response = get_riko_response_no_tool(messages)
     # print("\nRiko Response:", riko_response.output_text, "\n")
 
     # Save assistant's response
-=======
-    # just append assistant message to regular response. 
->>>>>>> parent of 1271c77 (Added Hybrid memories)
     messages.append({
     "role": "assistant",
     "content": [
         {"type": "output_text", "text": riko_test_response.output_text}
     ]
     })
-<<<<<<< HEAD
-    print("\n\nRiko's prompt: ", messages,"\n\n")
     # Remove the system prompt from the messages (splice the list directly)
     messages = messages[1:]  # Skip the first element as it's the system setup message
     # Comment out the above line and uncomment the line below to also skip RAG memory system message.
     # messages = messages[2:] to also skip the RAG memory system message.
-=======
-
->>>>>>> parent of 1271c77 (Added Hybrid memories)
     save_history(messages)
+    print(riko_test_response.output_text)
     return riko_test_response.output_text
 
 
