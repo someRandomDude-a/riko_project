@@ -32,7 +32,7 @@ def sovits_gen(in_text, output_wav_pth = "output.wav"):
         response = requests.post(url, json=payload)
         response.raise_for_status()  # throws if not 200
 
-        print(response)
+        #print(response)
 
         # Save the response audio if it's binary
         with open(output_wav_pth, "wb") as f:

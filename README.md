@@ -17,7 +17,7 @@
 All prompts and parameters are stored in `config.yaml`.
 
 ```yaml
-OPENAI_API_KEY: 
+OPENAI_API_KEY: PUT_YOUR_API_KEY_HERE
 history_file: chat_history.json
 model: "deepseek/deepseek-r1-0528-qwen3-8b"
 base_url: http://localhost:1234/v1
