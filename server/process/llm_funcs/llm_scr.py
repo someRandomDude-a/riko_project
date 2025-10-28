@@ -5,8 +5,9 @@ import gradio as gr
 import json
 import os
 from openai import OpenAI
-
+from typing import cast
 from process.llm_funcs.Memory_system.long_term_memory import *
+import numpy as np
 
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
@@ -63,6 +64,13 @@ def save_history(history):
 def add_message_to_memory(message_text):
     """Adds a message to long-term memory with default importance."""
     global memory_store, faiss_index
+    
+    # === Skip duplicates ===
+    if any(m['text'] == message_text for m in memory_store):
+        print("[Memory] Duplicate message detected — skipping.")
+        return
+    
+    # format new memory entry
     new_memory = {
         "text": message_text,
         "importance_score": char_config['RAG_params']['default_importance_score'] ,
@@ -71,7 +79,9 @@ def add_message_to_memory(message_text):
         "detailed": True,
     }
     memory_store.append(new_memory)
-    embedding = np.array([get_embedding(message_text)]).astype("float32")
+    
+    embedding = np.array(get_embedding(message_text), dtype=np.float32).reshape(1, -1)
+        
     faiss_index.add(embedding)
     save_memory_store(memory_store)
     save_faiss_index(faiss_index)
@@ -79,19 +89,22 @@ def add_message_to_memory(message_text):
 
 # === Handle context overflow ===
 def handle_rolling_window(time_exceeded):
-    return
+    
     """When context window is full, archive old messages into long-term memory."""
     print(f"[INFO] Context window exceeded at {time_exceeded}. Archiving old messages.")
     history = load_history()
+    if not history:
+        print("[INFO] No history to manage.")
+        return
     while True:
-        token_count = sum(len(msg["content"][0]["text"].split()) for msg in history)
-        if token_count <= MAX_HISTORY_TOKENS:
+        approx_token_count = sum(len(msg["content"][0]["text"].split()) for msg in history)
+        if approx_token_count <= MAX_HISTORY_TOKENS:
             break
         # Pop oldest non-system message and store it
         dropped_message = history.pop(1)  # Keep system prompt at index 0
         message_text = dropped_message["content"][0]["text"]
         add_message_to_memory(message_text)
-    print("[INFO] Context window managed. Updated history saved.",token_count)
+    print("[INFO] Context window managed. Updated history saved. final history token count: ",approx_token_count)
     save_history(history)
 
 
@@ -174,7 +187,7 @@ def llm_response(user_input):
     # Comment out the above line and uncomment the line below to also skip RAG memory system message.
     # messages = messages[2:] to also skip the RAG memory system message.
     save_history(messages)
-    print(riko_test_response.output_text)
+    # print(riko_test_response.output_text)
     return riko_test_response.output_text
 
 
