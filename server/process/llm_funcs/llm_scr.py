@@ -102,7 +102,7 @@ def handle_rolling_window(time_exceeded):
             break
         # Pop oldest non-system message and store it
         dropped_message = history.pop(1)  # Keep system prompt at index 0
-        message_text = dropped_message["content"][0]["text"]
+        message_text = dropped_message
         add_message_to_memory(message_text)
     print("[INFO] Context window managed. Updated history saved. final history token count: ",approx_token_count)
     save_history(history)
