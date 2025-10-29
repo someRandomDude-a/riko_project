@@ -120,7 +120,7 @@ we will also query this database too retrieve relevant memories from the databas
 
 ## 🧑‍🎤 Credits
 
-* Fork of Riko Project by [Ryan](https://github.com/rayenfeng/riko_project)
+* Inspired by Riko Project by [Ryan](https://github.com/rayenfeng/riko_project)
 * Voice synthesis powered by [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)
 * ASR via [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper)
 * Language model via [OpenAI GPT](https://platform.openai.com)
