@@ -91,7 +91,7 @@ def add_message_to_memory(message_text):
 def handle_rolling_window(time_exceeded):
     
     """When context window is full, archive old messages into long-term memory."""
-    print(f"[INFO] Context window exceeded at {time_exceeded}. Archiving old messages.")
+    # print(f"[INFO] Context window exceeded at {time_exceeded}. Archiving old messages.")
     history = load_history()
     if not history:
         print("[INFO] No history to manage.")
@@ -101,8 +101,8 @@ def handle_rolling_window(time_exceeded):
         if approx_token_count <= MAX_HISTORY_TOKENS:
             break
         # Pop oldest non-system message and store it
-        dropped_message = history.pop(1)  # Keep system prompt at index 0
-        message_text = dropped_message["content"][0]["text"]
+        dropped_message = history.pop()  # Keep system prompt at index 0
+        message_text = dropped_message["role"].join(":").join(dropped_message["content"][0]["text"])
         add_message_to_memory(message_text)
     print("[INFO] Context window managed. Updated history saved. final history token count: ",approx_token_count)
     save_history(history)
@@ -116,8 +116,8 @@ def get_additional_memory(user_input):
     top_memories = ranked_memories[:top_k]  # Top-K relevant memories
     if not top_memories:
         return ""
-    memory_snippets = "\n".join([m["text"] for m in top_memories])
-    return f"Relevant long-term memories:\n{memory_snippets}"
+    memory_snippets = ",".join([f"({m['text']})" for m in top_memories])
+    return f"Relevant memories:[{memory_snippets}]"
 
 
 # === Core LLM call ===
