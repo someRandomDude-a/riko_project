@@ -16,8 +16,8 @@ with open('character_config.yaml', 'r') as f:
 
 
 # Constants (now converted to variables)
-MODEL_NAME = 'all-MiniLM-L6-v2'  # Sentence-BERT model name
-BART_MODEL_NAME = 'facebook/bart-large-cnn'  # BART model name for summarization
+MODEL_NAME = char_config['RAG_params']['embedding_model_id']  # Sentence-BERT model name
+BART_MODEL_NAME = char_config['RAG_params']['summarization_model_id']   # BART model name for summarization
 FAISS_INDEX_PATH = 'faiss_index.index'  # File path for FAISS index
 MEMORY_STORE_PATH = 'memory_store.json'  # File path for memory store
 EMBEDDING_DIM = char_config['RAG_params']['text_embedding_dim']  # Embedding dimension from config  
