@@ -4,3 +4,4 @@ openai
 faiss-cpu
 sentence-transformers
 transformers
+silero-vad
