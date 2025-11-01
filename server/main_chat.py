@@ -1,5 +1,6 @@
 from faster_whisper import WhisperModel
-from process.asr_func.asr_push_to_talk import record_and_transcribe
+#from process.asr_func.asr_push_to_talk import record_and_transcribe # we replace this with vad version
+from process.asr_func.auto_transcriber import record_and_transcribe # our new VAD version
 from process.llm_funcs.llm_scr import llm_response
 from process.tts_func.sovits_ping import sovits_gen, play_audio
 from pathlib import Path
