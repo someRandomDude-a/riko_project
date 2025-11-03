@@ -121,6 +121,6 @@ we will also query this database too retrieve relevant memories from the databas
 ## 🧑‍🎤 Credits
 
 * Inspired by Riko Project by [Ryan](https://github.com/rayenfeng/riko_project)
-* Voice synthesis powered by [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)
+* Voice synthesis powered by [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) - Soon to be replaced with IndexTTS
 * ASR via [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper)
-* Language model via [OpenAI GPT](https://platform.openai.com)
+* Language model via [OpenAI GPT](https://platform.openai.com) -  or any other tool like LM - studio (look at configuration menu)
