@@ -87,9 +87,9 @@ python main_chat.py
 
 The flow:
 
-1. Riko listens to your voice via microphone (push to talk)
+1. Riko listens to your voice via microphone (Voice Activity Detection)
 2. Transcribes it with Faster-Whisper
-3. Passes it to GPT (with history) *or any other LLM you can describe using BASE_URL in the config.yaml
+3. Passes it to GPT (with history + memory and any other tool results) *or any other LLM you can describe using BASE_URL & model in the config.yaml
 4. Generates a response
 5. Synthesizes Riko's voice using GPT-SoVITS
 6. Plays the output back to you
