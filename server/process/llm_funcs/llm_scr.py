@@ -129,8 +129,8 @@ def get_riko_response_no_tool(messages):
     response = client.responses.create(
         model=MODEL,
         input=messages,
-        temperature= char_config['presets']['default']['model_params']['temperature'],
-        top_p= char_config['presets']['default']['model_params']['top_p']  ,
+        #temperature= char_config['presets']['default']['model_params']['temperature'],
+        #top_p= char_config['presets']['default']['model_params']['top_p']  ,
         max_output_tokens= char_config['presets']['default']['model_params']['max_output_tokens'],
         stream=False,
         text={
