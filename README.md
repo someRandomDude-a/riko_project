@@ -117,7 +117,7 @@ we will also query this database too retrieve relevant memories from the databas
 * [ ] Emotion or tone control in speech synthesis
 * [ ] VRM model frontend
 * [ ] Avatar using V-tube studio
-* [ ] Ability too see the users screen
+* [ ] Ability too see the users screen -> The plan is to use CLIP and tesseract too generate context
 * [ ] Ability too type / edit code directly for the user
 * [ ] Ability too Hear emotion and tone in the user voice
 
