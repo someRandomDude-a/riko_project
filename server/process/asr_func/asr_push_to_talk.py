@@ -3,7 +3,7 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 from faster_whisper import WhisperModel
-
+import copy
 def record_and_transcribe(model, output_file="recording.wav", samplerate=44100):
     """
     Simple push-to-talk recorder: record -> save -> transcribe -> return text

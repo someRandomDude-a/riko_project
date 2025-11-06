@@ -12,10 +12,12 @@ vad_model = None
 
 try:
     # Pip method
+    print("Loading Silero VAD model...")
     from silero_vad import load_silero_vad, get_speech_timestamps
     # Load model
-    model = load_silero_vad()
     
+    model = load_silero_vad()
+    print("Silero VAD model loaded.")
     # Soundfile backend read function
     def read_audio_with_soundfile(file_path):
         audio, sample_rate = sf.read(file_path)
@@ -68,7 +70,7 @@ def silero_vad_detection(audio_chunk, vad_model, sampling_rate=16000, threshold=
         print(f"VAD error: {e}, using energy detection")
         return None
     
-def record_and_transcribe(model, output_file="recording.wav", samplerate=44100):
+def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
     # Remove existing file
     if os.path.exists(output_file):
         os.remove(output_file)
@@ -172,8 +174,10 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=44100):
 
 # Test code
 if __name__ == "__main__":
+    print("Testing auto transcriber with VAD...")
     model = WhisperModel("distil-large-v3", device="cuda", compute_type="int8_float16")
     result = ""
+    print("Say 'Stop.' to exit.")
     while result != "Stop.":
         result = record_and_transcribe(model)
         print(f"Got: '{result}'")
