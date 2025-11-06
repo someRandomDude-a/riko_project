@@ -8,7 +8,7 @@ from transformers import BartTokenizer, BartForConditionalGeneration
 import torch
 import yaml
 
-
+import copy
 # === Load Character Configuration ===
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
@@ -53,10 +53,12 @@ def load_memory_store():
         print(f"Loaded {len(memory_store)} memories from file.")
     else:
         memory_store = [
-            {"text": "I am an anime tsundere", "importance_score": 0.9, "timestamp": time.time(), "access_count": 0, "detailed": True},
+            {"text": "I Love Senpai very much", "importance_score": 0.9, "timestamp": time.time(), "access_count": 0, "detailed": True},
             {"text": "I am Riko", "importance_score": 0.7, "timestamp": time.time(), "access_count": 0, "detailed": True},
-            {"text": "I should crack jokes more often", "importance_score": 0.8, "timestamp": time.time(), "access_count": 0, "detailed": True},
-        ]
+            {"text": "I should use jokes and sarcasm ", "importance_score": 0.8, "timestamp": time.time(), "access_count": 0, "detailed": True},
+            {"text": "I like to tease Senpai", "importance_score": 0.9, "timestamp": time.time(), "access_count": 0, "detailed": True},
+            {"text": "I love spending time with Senpai", "importance_score": 0.9, "timestamp": time.time(), "access_count": 0, "detailed": True},
+            ]
         print("No memory store found, using default memories.")
     return memory_store
 
@@ -136,7 +138,7 @@ def decay_memory(memory):
         memory['detailed'] = False
 
     # After a certain period, discard the memory if importance is very low
-    if memory['importance_score'] < MEMORY_IMPORTANCE_THRESHOLD:  # Threshold for discarding
+    if memory['importance_score'] < MEMORY_IMPORTANCE_THRESHOLD and not memory['detailed']:  # Threshold for discarding
         return None  # This memory should be discarded
 
     return memory
@@ -150,7 +152,7 @@ def cleanup_memory_store(memory_store):
     # Filter out low-importance or very old memories
     memory_store = [
         memory for memory in memory_store
-        if (current_time - memory['timestamp']) < (threshold_age_days * 60 * 60 * 24) and memory['importance_score'] >= threshold_importance
+        if (current_time - memory['timestamp']) < (threshold_age_days * 60 * 60 * 24) or memory['importance_score'] >= threshold_importance
     ]
 
     print(f"Cleaned up memory store, {len(memory_store)} memories remaining.")
@@ -171,7 +173,7 @@ def get_relevant_memories(prompt, memory_store, index, k=5):
     # Rank memories by importance, decay, and similarity
     ranked_memories = []
     for idx, distance in zip(indices[0], distances[0]):
-        memory = memory_store[idx]
+        memory = copy.copy(memory_store[idx])
         age_in_days = (time.time() - memory['timestamp']) / (60 * 60 * 24)
         decay_factor = FAISS_DECAY_FACTOR_LOW
         if memory['importance_score'] > 0.8:
@@ -188,10 +190,9 @@ def get_relevant_memories(prompt, memory_store, index, k=5):
     # Update access count and importance
     for idx in indices[0]:
         memory_store[idx]['access_count'] += 1
+        update_memory_importance(memory_store[idx])
 
-    # Update memory importance
-    memory_store = [update_memory_importance(memory) for memory in memory_store]
-    
+    # Update memory store with decayed importance    
     memory_store =  [decay_memory(memory) for memory in memory_store]
     return ranked_memories, indices, distances
 
