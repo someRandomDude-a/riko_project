@@ -7,7 +7,7 @@ import os
 from transformers import BartTokenizer, BartForConditionalGeneration
 import torch
 import yaml
-
+from datetime import datetime
 import copy
 # === Load Character Configuration ===
 with open('character_config.yaml', 'r') as f:
@@ -52,12 +52,13 @@ def load_memory_store():
             memory_store = json.load(f)
         print(f"Loaded {len(memory_store)} memories from file.")
     else:
+        currentTime = datetime.now().isoformat(timespec='seconds')
         memory_store = [
-            {"text": "I Love Senpai very much", "importance_score": 0.9, "timestamp": time.time(), "access_count": 0, "detailed": True},
-            {"text": "I am Riko", "importance_score": 0.7, "timestamp": time.time(), "access_count": 0, "detailed": True},
-            {"text": "I should use jokes and sarcasm ", "importance_score": 0.8, "timestamp": time.time(), "access_count": 0, "detailed": True},
-            {"text": "I like to tease Senpai", "importance_score": 0.9, "timestamp": time.time(), "access_count": 0, "detailed": True},
-            {"text": "I love spending time with Senpai", "importance_score": 0.9, "timestamp": time.time(), "access_count": 0, "detailed": True},
+            {"text": "I Love Senpai very much", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "I am Riko", "importance_score": 0.7, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "I should use jokes and sarcasm ", "importance_score": 0.8, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "I like to tease Senpai", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "I love spending time with Senpai", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
             ]
         print("No memory store found, using default memories.")
     return memory_store
@@ -122,7 +123,7 @@ def summarize_text(text):
 # Function to apply timestamp decay and rank memories
 def decay_memory(memory):
     current_time = time.time()
-    age_in_days = (current_time - memory['timestamp']) / (60 * 60 * 24)
+    age_in_days = (current_time - datetime.fromisoformat(memory['timestamp']).timestamp()) / (60 * 60 * 24)
 
     # Decay based on importance: high importance memories decay slower
     decay_factor = FAISS_DECAY_FACTOR_LOW
@@ -152,7 +153,7 @@ def cleanup_memory_store(memory_store):
     # Filter out low-importance or very old memories
     memory_store = [
         memory for memory in memory_store
-        if (current_time - memory['timestamp']) < (threshold_age_days * 60 * 60 * 24) or memory['importance_score'] >= threshold_importance
+        if (current_time - datetime.fromisoformat(memory['timestamp']).timestamp()) < (threshold_age_days * 60 * 60 * 24) or memory['importance_score'] >= threshold_importance
     ]
 
     print(f"Cleaned up memory store, {len(memory_store)} memories remaining.")
@@ -174,7 +175,7 @@ def get_relevant_memories(prompt, memory_store, index, k=5):
     ranked_memories = []
     for idx, distance in zip(indices[0], distances[0]):
         memory = copy.copy(memory_store[idx])
-        age_in_days = (time.time() - memory['timestamp']) / (60 * 60 * 24)
+        age_in_days = (time.time() - datetime.fromisoformat(memory['timestamp']).timestamp()) / (60 * 60 * 24)
         decay_factor = FAISS_DECAY_FACTOR_LOW
         if memory['importance_score'] > 0.8:
             decay_factor = FAISS_DECAY_FACTOR_HIGH
@@ -182,7 +183,6 @@ def get_relevant_memories(prompt, memory_store, index, k=5):
         
         memory['ranked_score'] = memory['importance_score'] * decay
         memory['similarity_score'] = 1 / (1 + distance)  # Inverse distance for higher similarity
-        
         ranked_memories.append(memory)
 
     ranked_memories = sorted(ranked_memories, key=lambda x: x['ranked_score'], reverse=True)

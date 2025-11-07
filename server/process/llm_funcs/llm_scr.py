@@ -8,12 +8,19 @@ from openai import OpenAI
 from typing import cast
 from process.llm_funcs.Memory_system.long_term_memory import *
 import numpy as np
+from datetime import datetime
+import time
+
+
 
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
 
 client = OpenAI(api_key=char_config['OPENAI_API_KEY'] , base_url=char_config['base_url']
                 )
+
+def get_datetime_iso():
+    return datetime.now().isoformat(timespec='seconds')
 
 # Constants
 HISTORY_FILE = char_config['history_file']
@@ -24,8 +31,8 @@ SYSTEM_PROMPT =  [
             "content": [
                 {
                     "type": "input_text",
-                    "text": char_config['presets']['default']['system_prompt']  
-                }
+                    "text": char_config['presets']['default']['system_prompt'] 
+                },
             ]
         }
     ]
@@ -61,7 +68,7 @@ def save_history(history):
 
 
 # === Send old messages to long-term memory ===
-def add_message_to_memory(message_text):
+def add_message_to_memory(message_text, message_time=datetime.now().isoformat(timespec='seconds')):
     """Adds a message to long-term memory with default importance."""
     global memory_store, faiss_index
     
@@ -74,7 +81,7 @@ def add_message_to_memory(message_text):
     new_memory = {
         "text": message_text,
         "importance_score": char_config['RAG_params']['default_importance_score'] ,
-        "timestamp": time.time(),
+        "timestamp": message_time,
         "access_count": 0,
         "detailed": True,
     }
@@ -101,24 +108,29 @@ def handle_rolling_window(time_exceeded):
         if approx_token_count <= MAX_HISTORY_TOKENS:
             break
         # Pop oldest non-system message and store it
-        dropped_message = history.pop()  # Keep system prompt at index 0
+        dropped_message = history.pop()
         if dropped_message["role"] == "system":
             continue
         message_text = ":".join([dropped_message["role"], dropped_message["content"][0]["text"]])
-        add_message_to_memory(message_text)
+        message_time = message_text.split("->")[-1]
+        message_text = message_text.rsplit("->", 1)[0]
+        if message_time.strip() == "":
+            message_time = get_datetime_iso()    
+            
+        add_message_to_memory(message_text,message_time)
     print("[INFO] Context window managed. Updated history saved. final history token count: ",approx_token_count)
     save_history(history)
 
 
 # === Retrieve relevant memories for new prompt ===
 def get_additional_memory(user_input):
-    """Query long-term memory for related past experiences."""
+    # Query long-term memory for related past experiences.
     ranked_memories, _, _ = get_relevant_memories(user_input, memory_store, faiss_index)
     top_k = char_config['RAG_params']['default_top_k']    
     top_memories = ranked_memories[:top_k]  # Top-K relevant memories
     if not top_memories:
         return ""
-    memory_snippets = ",".join([f"({m['text']})" for m in top_memories])
+    memory_snippets = ",".join([f"[({m['text']}->{m['timestamp']})" for m in top_memories])
     return f"Relevant memories:[{memory_snippets}]"
 
 
@@ -146,7 +158,7 @@ def get_riko_response_no_tool(messages):
 def llm_response(user_input):
     """Handles user input, manages context, queries memory, and returns model output."""
 
-    handle_rolling_window(time.time())
+    handle_rolling_window(get_datetime_iso())
 
     
     messages = SYSTEM_PROMPT[:]  # Start with system prompt
@@ -167,7 +179,7 @@ def llm_response(user_input):
     messages.append({
         "role": "user",
         "content": [
-            {"type": "input_text", "text": user_input}
+            {"type": "input_text", "text": user_input + "->" + get_datetime_iso()}
         ]
     })
     
@@ -181,17 +193,17 @@ def llm_response(user_input):
     messages.append({
     "role": "assistant",
     "content": [
-        {"type": "output_text", "text": riko_test_response.output_text}
-    ]
+        {"type": "output_text", "text": riko_test_response.output_text + "->" + get_datetime_iso()}
+    ]    
     })
     # Remove the system prompt from the messages (splice the list directly)
     messages = messages[1:]  # Skip the first element as it's the system setup message
     # Comment out the above line and uncomment the line below to also skip RAG memory system message.
     # messages = messages[2:] to also skip the RAG memory system message.
-    save_history(messages)
+    save_history(messages) # The part where we actually save the history from llm response
     # print(riko_test_response.output_text)
     return riko_test_response.output_text
 
 
 if __name__ == "__main__":
-    print('running main')
+    print('running as main \n this is not supported, please run main_chat.py instead')
