@@ -198,8 +198,7 @@ def llm_response(user_input):
     })
     # Remove the system prompt from the messages (splice the list directly)
     messages = messages[1:]  # Skip the first element as it's the system setup message
-    # Comment out the above line and uncomment the line below to also skip RAG memory system message.
-    # messages = messages[2:] to also skip the RAG memory system message.
+    # Change from 1 to 2 to also skip RAG system messages from being appended to history
     save_history(messages) # The part where we actually save the history from llm response
     # print(riko_test_response.output_text)
     return riko_test_response.output_text

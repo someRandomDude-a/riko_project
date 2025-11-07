@@ -42,6 +42,8 @@ while True:
         output_wav_path.parent.mkdir(parents=True, exist_ok=True)
 
         # generate audio and save it to client/audio 
+        # Remove timestamp from tts_read_text before passing it spoken text part that we care about->timestamp
+        tts_read_text = tts_read_text.split("->",1)[-1].strip()
         gen_aud_path = sovits_gen(tts_read_text,output_wav_path)
 
 

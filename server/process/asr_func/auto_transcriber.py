@@ -84,8 +84,8 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
     # Audio recording parameters
     chunk_duration = 0.5  # Process audio in 0.5 second chunks
     chunk_size = int(samplerate * chunk_duration)
-    min_speech_duration = 1.5  # Minimum seconds of speech to record
-    silence_timeout = 2.0  # Stop recording after X seconds of silence
+    min_speech_duration = 1  # Minimum seconds of speech to record
+    silence_timeout = 3.0  # Stop recording after X seconds of silence
     max_silence_samples = int(silence_timeout / chunk_duration)
     
     # Recording state

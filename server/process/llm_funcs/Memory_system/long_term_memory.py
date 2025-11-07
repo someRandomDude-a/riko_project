@@ -4,7 +4,7 @@ from sentence_transformers import SentenceTransformer
 import time
 import json
 import os
-from transformers import BartTokenizer, BartForConditionalGeneration
+from transformers import pipeline
 import torch
 import yaml
 from datetime import datetime
@@ -30,20 +30,23 @@ SUMMARY_MAX_TOKENS = char_config['RAG_params']['summary_max_tokens'] # Maximum n
 MEMORY_CLEANUP_THRESHOLD_DAYS = char_config['RAG_params']['memory_cleanup_threshold']  # Days before memory is eligible for cleanup
 MEMORY_IMPORTANCE_THRESHOLD = char_config['RAG_params']['memory_importance_threshold']  # Threshold below which memories are discarded
 
-_summarizer_tokenizer = None
-_summarizer_model = None
 
 # Load SentenceTransformer model
 model = SentenceTransformer(MODEL_NAME)
 
-def get_summarizer():
-    """Load the summarizer lazily (only when needed)."""
-    global _summarizer_tokenizer, _summarizer_model
-    if _summarizer_tokenizer is None or _summarizer_model is None:
-        print("[INFO] Loading BART summarizer model...")
-        _summarizer_tokenizer = BartTokenizer.from_pretrained(BART_MODEL_NAME)
-        _summarizer_model = BartForConditionalGeneration.from_pretrained(BART_MODEL_NAME)
-    return _summarizer_tokenizer, _summarizer_model
+summarizerPipeline = pipeline("summarization",model=BART_MODEL_NAME)
+
+
+# Function to summarize memory using BART
+
+def summarize_text(text):
+    global summarizerPipeline
+    summary = summarizerPipeline(text,max_length= SUMMARY_MAX_LENGTH, min_length=SUMMARY_MIN_LENGTH)
+    summary_text = ""
+    for text in summary:
+        summary_text += text['summary_text']
+    return summary_text
+
 
 # Load or initialize memory store
 def load_memory_store():
@@ -105,20 +108,6 @@ def query_faiss_cpu(index, query_embedding, k=5):
     distances, indices = index.search(query_embedding, k)  # Get top-k indices and distances
     return indices, distances
 
-# Function to summarize memory using BART
-def summarize_text(text):
-    """Summarize text using BART."""
-    tokenizer, model = get_summarizer()
-    inputs = tokenizer([text], max_length=SUMMARY_MAX_TOKENS, return_tensors="pt", truncation=True)
-    summary_ids = model.generate(
-        inputs["input_ids"],
-        num_beams=SUMMARY_NUM_BEAMS,
-        min_length=SUMMARY_MIN_LENGTH,
-        max_length=SUMMARY_MAX_LENGTH,
-        early_stopping=True,
-    )
-    summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-    return summary
 
 # Function to apply timestamp decay and rank memories
 def decay_memory(memory):
