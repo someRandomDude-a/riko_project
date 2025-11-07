@@ -75,7 +75,6 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
     if os.path.exists(output_file):
         os.remove(output_file)
     
-    print("🎤 Smart recording mode with Silero VAD - speak naturally!")
     print("⏳ Listening for speech...")
     
     # Load VAD model (cached globally for performance)
@@ -85,7 +84,7 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
     chunk_duration = 0.5  # Process audio in 0.5 second chunks
     chunk_size = int(samplerate * chunk_duration)
     min_speech_duration = 1  # Minimum seconds of speech to record
-    silence_timeout = 3.0  # Stop recording after X seconds of silence
+    silence_timeout = 2.0  # Stop recording after X seconds of silence
     max_silence_samples = int(silence_timeout / chunk_duration)
     
     # Recording state

@@ -108,7 +108,7 @@ def handle_rolling_window(time_exceeded):
         if approx_token_count <= MAX_HISTORY_TOKENS:
             break
         # Pop oldest non-system message and store it
-        dropped_message = history.pop()
+        dropped_message = history.pop(0)
         if dropped_message["role"] == "system":
             continue
         message_text = ":".join([dropped_message["role"], dropped_message["content"][0]["text"]])
