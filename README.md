@@ -17,9 +17,11 @@
 All prompts and parameters are stored in `config.yaml`.
 
 ```yaml
-OPENAI_API_KEY: PUT_YOUR_API_KEY_HERE
+OPENAI_API_KEY: YOUR_OPENAI_API_KEY_HERE
 history_file: chat_history.json
-model: "deepseek/deepseek-r1-0528-qwen3-8b"
+model : "hermes-2-pro-mistral-7b"
+# model: "gpt-5-nano"
+# base_url: https://api.openai.com/v1
 base_url: http://localhost:1234/v1
 presets:
   default:
@@ -30,21 +32,22 @@ presets:
       Try too keep conversations short and concise with lots of humor.
       Put actions in asterisks, e.g. *blushes*
       You have a cute and playful personality.
+      Do not use markup, you can only respond in plain text.
     
     model_params:
-      context_window_token_limit: 200
-      temperature: 0.7
-      max_output_tokens: 1024
-      top_p: 0.9
+      context_window_token_limit: 2048 # this defines the context window size for managing chat history
+      max_output_tokens: 4096
       frequency_penalty: 0.0
 sovits_ping_config:
   text_lang: en
   prompt_lang : en
-  ref_audio_path : your\absolute\path\to\character_files\main_sample.wav
+  ref_audio_path : C:\Users\abhyu\OneDrive\Documents\GitHub\riko_project\character_files\main_sample.wav
   prompt_text : This is a sample voice for you to just get started with because it sounds kind of cute but just make sure this doesn't have long silences.
 
 RAG_params:
-  text_embedding_dim: 384 # Dimension of embeddings from Sentence-BERT 'all-MiniLM-L6-v2'
+  embedding_model_id: 'Qwen/Qwen3-Embedding-0.6B'
+  summarization_model_id: 'facebook/bart-large-cnn'
+  text_embedding_dim: 1024 # Dimension of embeddings from Sentence-BERT 'all-MiniLM-L6-v2'
   default_importance_score: 0.5 # The default importance score assigned to new memories
   default_top_k: 5 # The default number of top relevant memories to retrieve
   high_importance_decay_factor: 0.0005 # Decay factor for high-importance memories
@@ -55,6 +58,7 @@ RAG_params:
   summary_beam_size: 4 # Beam search size for summarization
   memory_cleanup_threshold: 30 # Days after which memories are considered for cleanup
   memory_importance_threshold: 0.1 # Importance score below which memories are considered for cleanup
+
 ````
 
 You can define personalities by modiying the config file.
