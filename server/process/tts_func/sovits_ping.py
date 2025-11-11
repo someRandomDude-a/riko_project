@@ -55,8 +55,9 @@ if __name__ == "__main__":
     
     end_time = time.time()
     elapsed_time = end_time - start_time
-
     print(f"Elapsed time: {elapsed_time:.4f} seconds")
+    play_audio(output_wav_pth1)
+
     print(path_to_aud)
 
 

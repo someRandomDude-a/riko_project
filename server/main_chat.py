@@ -2,7 +2,12 @@ from faster_whisper import WhisperModel
 #from process.asr_func.asr_push_to_talk import record_and_transcribe # we replace this with vad version
 from process.asr_func.auto_transcriber import record_and_transcribe # our new VAD version
 from process.llm_funcs.llm_scr import llm_response
-from process.tts_func.sovits_ping import sovits_gen, play_audio
+
+##Variable to set streaming mode or normal mode for sovits gen
+streamSovitsGen = True
+from process.tts_func.sovits_streaming import sovits_gen_stream #Import the streaming mode function
+from process.tts_func.sovits_ping import sovits_gen, play_audio #Import the ping mode functions
+
 from pathlib import Path
 import os
 import time
@@ -44,17 +49,14 @@ while True:
         # generate audio and save it to client/audio 
         # Remove timestamp from tts_read_text before passing it spoken text part that we care about->timestamp
         tts_read_text = tts_read_text.split("timestamp:")[0].strip()
-        gen_aud_path = sovits_gen(tts_read_text,output_wav_path)
+        #for non streaming, use this:
+        if streamSovitsGen:
+            sovits_gen_stream(tts_read_text)
+        else:
+            gen_aud_path = sovits_gen(tts_read_text,output_wav_path)
+            play_audio(output_wav_path)
+            [fp.unlink() for fp in Path("audio").glob("*.wav") if fp.is_file()]        # clean up audio files
 
-
-        play_audio(output_wav_path)
-        # clean up audio files
-        [fp.unlink() for fp in Path("audio").glob("*.wav") if fp.is_file()]
-        # # Example
-        # duration = get_wav_duration(output_wav_path)
-
-        # print("waiting for audio to finish...")
-        # time.sleep(duration)
     except Exception as e:
         print(f"[ERROR] An error occurred: {e}")
         break
