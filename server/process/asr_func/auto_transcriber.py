@@ -156,7 +156,7 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
     # Combine all audio chunks
     recording = np.concatenate(audio_data, axis=0)
     
-    print("💾 Saving audio...")
+    #print("💾 Saving audio...")
     
     # Write the file
     # sf.write(output_file, recording, samplerate)

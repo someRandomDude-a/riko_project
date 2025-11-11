@@ -188,12 +188,12 @@ def llm_response(user_input):
     # Send request to LLM
     riko_test_response = get_riko_response_no_tool(messages)
 
-
+    riko_test_response = riko_test_response.output_text.rsplit("timestamp:",1)[0].strip()
     # Save assistant's response
     messages.append({
     "role": "assistant",
     "content": [
-        {"type": "output_text", "text": riko_test_response.output_text + " timestamp:" + get_datetime_iso()}
+        {"type": "output_text", "text": riko_test_response + " timestamp:" + get_datetime_iso()}
     ]    
     })
     # Remove the system prompt from the messages (splice the list directly)
@@ -201,7 +201,7 @@ def llm_response(user_input):
     # Change from 1 to 2 to also skip RAG system messages from being appended to history
     save_history(messages) # The part where we actually save the history from llm response
     # print(riko_test_response.output_text)
-    return riko_test_response.output_text
+    return riko_test_response
 
 
 if __name__ == "__main__":
