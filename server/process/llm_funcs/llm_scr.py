@@ -19,9 +19,6 @@ with open('character_config.yaml', 'r') as f:
 client = OpenAI(api_key=char_config['OPENAI_API_KEY'] , base_url=char_config['base_url']
                 )
 
-def get_datetime_iso():
-    return datetime.now().isoformat(timespec='seconds')
-
 # Constants
 HISTORY_FILE = char_config['history_file']
 MODEL = char_config['model']
@@ -115,7 +112,7 @@ def handle_rolling_window(time_exceeded):
         message_time = message_text.split(" timestamp:")[-1]
         message_text = message_text.rsplit(" timestamp:", 1)[0]
         if message_time.strip() == "":
-            message_time = get_datetime_iso()    
+            message_time = datetime.now().isoformat(timespec='seconds')    
             
         add_message_to_memory(message_text,message_time)
     print("[INFO] Context window managed. Updated history saved. final history token count: ",approx_token_count)
@@ -158,7 +155,7 @@ def get_riko_response_no_tool(messages):
 def llm_response(user_input):
     """Handles user input, manages context, queries memory, and returns model output."""
 
-    handle_rolling_window(get_datetime_iso())
+    handle_rolling_window(datetime.now().isoformat(timespec='seconds'))
 
     
     messages = SYSTEM_PROMPT[:]  # Start with system prompt
@@ -179,7 +176,7 @@ def llm_response(user_input):
     messages.append({
         "role": "user",
         "content": [
-            {"type": "input_text", "text": user_input + " timestamp:" + get_datetime_iso()}
+            {"type": "input_text", "text": user_input + " timestamp:" + datetime.now().isoformat(timespec='seconds')}
         ]
     })
     
@@ -187,13 +184,14 @@ def llm_response(user_input):
         
     # Send request to LLM
     riko_test_response = get_riko_response_no_tool(messages)
-
-    riko_test_response = riko_test_response.output_text.rsplit("timestamp:",1)[0].strip()
+    
+    #This is basically us replacing the AI's parroted timestamp with an accurate timestamp
+    riko_test_response = riko_test_response.output_text.rsplit("timestamp:",1)[0].strip() # stop the AI from parroting the timestamps
     # Save assistant's response
     messages.append({
     "role": "assistant",
     "content": [
-        {"type": "output_text", "text": riko_test_response + " timestamp:" + get_datetime_iso()}
+        {"type": "output_text", "text": riko_test_response + " timestamp:" + datetime.now().isoformat(timespec='seconds')}
     ]    
     })
     # Remove the system prompt from the messages (splice the list directly)
