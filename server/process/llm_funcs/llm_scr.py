@@ -112,8 +112,8 @@ def handle_rolling_window(time_exceeded):
         if dropped_message["role"] == "system":
             continue
         message_text = ":".join([dropped_message["role"], dropped_message["content"][0]["text"]])
-        message_time = message_text.split("->")[-1]
-        message_text = message_text.rsplit("->", 1)[0]
+        message_time = message_text.split(" timestamp:")[-1]
+        message_text = message_text.rsplit(" timestamp:", 1)[0]
         if message_time.strip() == "":
             message_time = get_datetime_iso()    
             
@@ -130,7 +130,7 @@ def get_additional_memory(user_input):
     top_memories = ranked_memories[:top_k]  # Top-K relevant memories
     if not top_memories:
         return ""
-    memory_snippets = ",".join([f"[({m['text']}->{m['timestamp']})" for m in top_memories])
+    memory_snippets = ",".join([f"[({m['text']} timestamp:{m['timestamp']})" for m in top_memories])
     return f"Relevant memories:[{memory_snippets}]"
 
 
@@ -179,7 +179,7 @@ def llm_response(user_input):
     messages.append({
         "role": "user",
         "content": [
-            {"type": "input_text", "text": user_input + "->" + get_datetime_iso()}
+            {"type": "input_text", "text": user_input + " timestamp:" + get_datetime_iso()}
         ]
     })
     
@@ -193,7 +193,7 @@ def llm_response(user_input):
     messages.append({
     "role": "assistant",
     "content": [
-        {"type": "output_text", "text": riko_test_response.output_text + "->" + get_datetime_iso()}
+        {"type": "output_text", "text": riko_test_response.output_text + " timestamp:" + get_datetime_iso()}
     ]    
     })
     # Remove the system prompt from the messages (splice the list directly)

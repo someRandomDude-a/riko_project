@@ -159,12 +159,12 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
     print("💾 Saving audio...")
     
     # Write the file
-    sf.write(output_file, recording, samplerate)
+    # sf.write(output_file, recording, samplerate)
     
     print("🎯 Transcribing...")
     
     # Transcribe using faster-whisper
-    segments, info = model.transcribe(output_file, beam_size=5)
+    segments, info = model.transcribe(recording, beam_size=5)
     transcription = " ".join([segment.text for segment in segments])
     
     print(f"Transcription: {transcription}")
@@ -179,5 +179,5 @@ if __name__ == "__main__":
     print("Say 'Stop.' to exit.")
     while result != "Stop.":
         result = record_and_transcribe(model)
-        print(f"Got: '{result}'")
+        #print(f"Got: '{result}'")
     print("Heard Stop, Exiting...")
