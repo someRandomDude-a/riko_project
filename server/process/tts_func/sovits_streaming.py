@@ -9,7 +9,7 @@ import threading
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
 
-def play_raw_stream(response, sample_rate: int, channels: int, dtype: np.dtype, timeout_secs: float = 2, start_secs: float = 10):
+def play_raw_stream(response, sample_rate: int, channels: int, dtype: np.dtype, timeout_secs: float = 3, start_secs: float = 30):
     """
     Streams raw PCM from response, waits for first chunk till start_secs, and stops when no data for timeout_secs.
     """

@@ -1,7 +1,6 @@
 # OpenAI tool calling with history 
 ### Uses a sample function
 import yaml
-import gradio as gr
 import json
 import os
 from openai import OpenAI
@@ -9,7 +8,6 @@ from typing import cast
 from process.llm_funcs.Memory_system.long_term_memory import *
 import numpy as np
 from datetime import datetime
-import time
 
 
 

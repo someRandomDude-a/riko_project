@@ -5,7 +5,6 @@ import numpy as np
 from faster_whisper import WhisperModel
 import torch
 import time
-
 # Global Silero VAD model cache for performance
 vad_model = None
 
@@ -164,7 +163,7 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
     print("🎯 Transcribing...")
     
     # Transcribe using faster-whisper
-    segments, info = model.transcribe(recording, beam_size=5)
+    segments, info = model.transcribe(recording, beam_size=5, vad_filter =False)
     transcription = " ".join([segment.text for segment in segments])
     
     print(f"Transcription: {transcription}")
@@ -174,7 +173,7 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
 # Test code
 if __name__ == "__main__":
     print("Testing auto transcriber with VAD...")
-    model = WhisperModel("distil-large-v3", device="cuda", compute_type="int8_float16")
+    model = WhisperModel("distil-small.en", device="cuda", compute_type="int8_float16")
     result = ""
     print("Say 'Stop.' to exit.")
     while result != "Stop.":

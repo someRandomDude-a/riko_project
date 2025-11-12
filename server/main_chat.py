@@ -23,7 +23,7 @@ def get_wav_duration(path):
 
 
 print(' \n ========= Starting Chat... ================ \n')
-whisper_model = WhisperModel("distil-large-v3", device="cuda", compute_type="int8_float16")
+whisper_model = WhisperModel("distil-small.en", device="cuda", compute_type="int8_float16")
 
 while True:
     try:
