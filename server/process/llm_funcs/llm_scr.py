@@ -5,7 +5,7 @@ import json
 import os
 from openai import OpenAI
 from typing import cast
-from process.llm_funcs.Memory_system.long_term_memory import *
+from process.llm_funcs.Memory_system.long_term_memory import load_faiss_index, load_memory_store, add_embeddings_to_faiss, save_faiss_index, save_memory_store, get_relevant_memories, get_embedding 
 import numpy as np
 from datetime import datetime
 

@@ -74,9 +74,12 @@ def save_memory_store(memory_store):
 
 # Create FAISS-CPU index
 def create_faiss_cpu_index(dim: int):
-    index = faiss.IndexFlatL2(dim)
+    M = 64  # Number of bi-directional links per node (tradeoff: accuracy vs. memory)
+    index = faiss.IndexHNSWFlat(dim, M)
+    index.hnsw.efConstruction = 200  # Controls build accuracy (higher = better, slower)
+    index.hnsw.efSearch = 100         # Controls query accuracy (higher = better, slower)
+    print(f"Created HNSWFlat FAISS index (dim={dim}, M={M})")
     return index
-
 # Save FAISS index to disk
 def save_faiss_index(index):
     faiss.write_index(index, FAISS_INDEX_PATH)
@@ -126,14 +129,11 @@ def decay_memory(memory):
     if memory['importance_score'] < 0.3 and memory['detailed']:  # Low importance, summarized
         memory['text'] = summarize_text(memory['text'])
         memory['detailed'] = False
-
-    # After a certain period, discard the memory if importance is very low
-    if memory['importance_score'] < MEMORY_IMPORTANCE_THRESHOLD and not memory['detailed']:  # Threshold for discarding
-        return None  # This memory should be discarded
-
+        
     return memory
 
 # Function to clean up low-importance memories (optional cleanup process)
+# This is a function for future implementation, THIS WILL BREAK YOUR MEMORY FILE!! DO NOT USE IT!
 def cleanup_memory_store(memory_store):
     current_time = time.time()
     threshold_age_days = MEMORY_CLEANUP_THRESHOLD_DAYS  # Clean memories older than 30 days
@@ -144,9 +144,12 @@ def cleanup_memory_store(memory_store):
         memory for memory in memory_store
         if (current_time - datetime.fromisoformat(memory['timestamp']).timestamp()) < (threshold_age_days * 60 * 60 * 24) or memory['importance_score'] >= threshold_importance
     ]
-
+    
+    index = create_faiss_cpu_index(EMBEDDING_DIM)
+    add_embeddings_to_faiss(index, memory_store)
+    
     print(f"Cleaned up memory store, {len(memory_store)} memories remaining.")
-    return memory_store
+    return memory_store, index
 
 # Function to update memory importance based on access count
 def update_memory_importance(memory):
@@ -209,5 +212,6 @@ if __name__ == "__main__":
         print("-" * 50)
 
     # Cleanup and save updated memory store
-    memory_store = cleanup_memory_store(memory_store)
+    memory_store, faiss_index = cleanup_memory_store(memory_store)
     save_memory_store(memory_store)
+    save_faiss_index(faiss_index)

@@ -48,15 +48,19 @@ while True:
 
         # generate audio and save it to client/audio 
         # Remove timestamp from tts_read_text before passing it spoken text part that we care about->timestamp
+        
         tts_read_text = tts_read_text.split("timestamp:")[0].strip()
         #for non streaming, use this:
-        if streamSovitsGen:
-            sovits_gen_stream(tts_read_text)
-        else:
-            gen_aud_path = sovits_gen(tts_read_text,output_wav_path)
-            play_audio(output_wav_path)
-            [fp.unlink() for fp in Path("audio").glob("*.wav") if fp.is_file()]        # clean up audio files
-
+        try:
+            if streamSovitsGen:
+                sovits_gen_stream(tts_read_text)
+            else:
+                gen_aud_path = sovits_gen(tts_read_text, output_wav_path)
+                play_audio(output_wav_path)
+                [fp.unlink() for fp in Path("audio").glob("*.wav") if fp.is_file()]        # clean up audio files
+        except KeyboardInterrupt as e:
+            print(f"[Keyboard Interrupt Called]: {e}")
+        
     except Exception as e:
         print(f"[ERROR] An error occurred: {e}")
         break
