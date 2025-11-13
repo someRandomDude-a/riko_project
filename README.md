@@ -41,7 +41,7 @@ presets:
 sovits_ping_config:
   text_lang: en
   prompt_lang : en
-  ref_audio_path : C:\Users\abhyu\OneDrive\Documents\GitHub\riko_project\character_files\main_sample.wav
+  ref_audio_path : pathr\to\your\riko_project\character_files\main_sample.wav
   prompt_text : This is a sample voice for you to just get started with because it sounds kind of cute but just make sure this doesn't have long silences.
 
 RAG_params:
