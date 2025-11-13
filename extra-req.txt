@@ -6,3 +6,4 @@ sentence-transformers
 transformers
 silero-vad
 pillow
+discord.py

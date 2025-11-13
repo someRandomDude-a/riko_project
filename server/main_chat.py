@@ -9,8 +9,7 @@ from process.tts_func.sovits_streaming import sovits_gen_stream #Import the stre
 from process.tts_func.sovits_ping import sovits_gen, play_audio #Import the ping mode functions
 
 from pathlib import Path
-import os
-import time
+
 ### transcribe audio 
 import uuid
 import soundfile as sf
@@ -33,11 +32,9 @@ while True:
         user_spoken_text = record_and_transcribe(whisper_model, conversation_recording)
 
         ### pass to LLM and get a LLM output.
+        tts_read_text = llm_response(user_spoken_text)
 
-        llm_output = llm_response(user_spoken_text)
-
-        tts_read_text = llm_output
-        print(llm_output)
+        print(tts_read_text)
         ### file organization 
 
         # 1. Generate a unique filename
