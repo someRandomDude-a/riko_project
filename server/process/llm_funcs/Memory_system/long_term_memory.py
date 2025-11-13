@@ -4,11 +4,11 @@ from sentence_transformers import SentenceTransformer
 import time
 import json
 import os
-from transformers import BartTokenizer, BartForConditionalGeneration
+from transformers import pipeline
 import torch
 import yaml
-
-
+from datetime import datetime
+import copy
 # === Load Character Configuration ===
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
@@ -30,20 +30,23 @@ SUMMARY_MAX_TOKENS = char_config['RAG_params']['summary_max_tokens'] # Maximum n
 MEMORY_CLEANUP_THRESHOLD_DAYS = char_config['RAG_params']['memory_cleanup_threshold']  # Days before memory is eligible for cleanup
 MEMORY_IMPORTANCE_THRESHOLD = char_config['RAG_params']['memory_importance_threshold']  # Threshold below which memories are discarded
 
-_summarizer_tokenizer = None
-_summarizer_model = None
 
 # Load SentenceTransformer model
 model = SentenceTransformer(MODEL_NAME)
 
-def get_summarizer():
-    """Load the summarizer lazily (only when needed)."""
-    global _summarizer_tokenizer, _summarizer_model
-    if _summarizer_tokenizer is None or _summarizer_model is None:
-        print("[INFO] Loading BART summarizer model...")
-        _summarizer_tokenizer = BartTokenizer.from_pretrained(BART_MODEL_NAME)
-        _summarizer_model = BartForConditionalGeneration.from_pretrained(BART_MODEL_NAME)
-    return _summarizer_tokenizer, _summarizer_model
+summarizerPipeline = pipeline("summarization",model=BART_MODEL_NAME)
+
+
+# Function to summarize memory using BART
+
+def summarize_text(text):
+    global summarizerPipeline
+    summary = summarizerPipeline(text,max_length= SUMMARY_MAX_LENGTH, min_length=SUMMARY_MIN_LENGTH)
+    summary_text = ""
+    for text in summary:
+        summary_text += text['summary_text']
+    return summary_text
+
 
 # Load or initialize memory store
 def load_memory_store():
@@ -52,11 +55,14 @@ def load_memory_store():
             memory_store = json.load(f)
         print(f"Loaded {len(memory_store)} memories from file.")
     else:
+        currentTime = datetime.now().isoformat(timespec='seconds')
         memory_store = [
-            {"text": "I am an anime tsundere", "importance_score": 0.9, "timestamp": time.time(), "access_count": 0, "detailed": True},
-            {"text": "I am Riko", "importance_score": 0.7, "timestamp": time.time(), "access_count": 0, "detailed": True},
-            {"text": "I should crack jokes more often", "importance_score": 0.8, "timestamp": time.time(), "access_count": 0, "detailed": True},
-        ]
+            {"text": "I Love Senpai very much", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "I am Riko", "importance_score": 0.7, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "I should use jokes and sarcasm ", "importance_score": 0.8, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "I like to tease Senpai", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "I love spending time with Senpai", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            ]
         print("No memory store found, using default memories.")
     return memory_store
 
@@ -68,9 +74,12 @@ def save_memory_store(memory_store):
 
 # Create FAISS-CPU index
 def create_faiss_cpu_index(dim: int):
-    index = faiss.IndexFlatL2(dim)
+    M = 64  # Number of bi-directional links per node (tradeoff: accuracy vs. memory)
+    index = faiss.IndexHNSWFlat(dim, M)
+    index.hnsw.efConstruction = 200  # Controls build accuracy (higher = better, slower)
+    index.hnsw.efSearch = 100         # Controls query accuracy (higher = better, slower)
+    print(f"Created HNSWFlat FAISS index (dim={dim}, M={M})")
     return index
-
 # Save FAISS index to disk
 def save_faiss_index(index):
     faiss.write_index(index, FAISS_INDEX_PATH)
@@ -102,25 +111,11 @@ def query_faiss_cpu(index, query_embedding, k=5):
     distances, indices = index.search(query_embedding, k)  # Get top-k indices and distances
     return indices, distances
 
-# Function to summarize memory using BART
-def summarize_text(text):
-    """Summarize text using BART."""
-    tokenizer, model = get_summarizer()
-    inputs = tokenizer([text], max_length=SUMMARY_MAX_TOKENS, return_tensors="pt", truncation=True)
-    summary_ids = model.generate(
-        inputs["input_ids"],
-        num_beams=SUMMARY_NUM_BEAMS,
-        min_length=SUMMARY_MIN_LENGTH,
-        max_length=SUMMARY_MAX_LENGTH,
-        early_stopping=True,
-    )
-    summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-    return summary
 
 # Function to apply timestamp decay and rank memories
 def decay_memory(memory):
     current_time = time.time()
-    age_in_days = (current_time - memory['timestamp']) / (60 * 60 * 24)
+    age_in_days = (current_time - datetime.fromisoformat(memory['timestamp']).timestamp()) / (60 * 60 * 24)
 
     # Decay based on importance: high importance memories decay slower
     decay_factor = FAISS_DECAY_FACTOR_LOW
@@ -134,14 +129,11 @@ def decay_memory(memory):
     if memory['importance_score'] < 0.3 and memory['detailed']:  # Low importance, summarized
         memory['text'] = summarize_text(memory['text'])
         memory['detailed'] = False
-
-    # After a certain period, discard the memory if importance is very low
-    if memory['importance_score'] < MEMORY_IMPORTANCE_THRESHOLD:  # Threshold for discarding
-        return None  # This memory should be discarded
-
+        
     return memory
 
 # Function to clean up low-importance memories (optional cleanup process)
+# This is a function for future implementation, THIS WILL BREAK YOUR MEMORY FILE!! DO NOT USE IT!
 def cleanup_memory_store(memory_store):
     current_time = time.time()
     threshold_age_days = MEMORY_CLEANUP_THRESHOLD_DAYS  # Clean memories older than 30 days
@@ -150,11 +142,14 @@ def cleanup_memory_store(memory_store):
     # Filter out low-importance or very old memories
     memory_store = [
         memory for memory in memory_store
-        if (current_time - memory['timestamp']) < (threshold_age_days * 60 * 60 * 24) and memory['importance_score'] >= threshold_importance
+        if (current_time - datetime.fromisoformat(memory['timestamp']).timestamp()) < (threshold_age_days * 60 * 60 * 24) or memory['importance_score'] >= threshold_importance
     ]
-
+    
+    index = create_faiss_cpu_index(EMBEDDING_DIM)
+    add_embeddings_to_faiss(index, memory_store)
+    
     print(f"Cleaned up memory store, {len(memory_store)} memories remaining.")
-    return memory_store
+    return memory_store, index
 
 # Function to update memory importance based on access count
 def update_memory_importance(memory):
@@ -171,8 +166,8 @@ def get_relevant_memories(prompt, memory_store, index, k=5):
     # Rank memories by importance, decay, and similarity
     ranked_memories = []
     for idx, distance in zip(indices[0], distances[0]):
-        memory = memory_store[idx]
-        age_in_days = (time.time() - memory['timestamp']) / (60 * 60 * 24)
+        memory = copy.copy(memory_store[idx])
+        age_in_days = (time.time() - datetime.fromisoformat(memory['timestamp']).timestamp()) / (60 * 60 * 24)
         decay_factor = FAISS_DECAY_FACTOR_LOW
         if memory['importance_score'] > 0.8:
             decay_factor = FAISS_DECAY_FACTOR_HIGH
@@ -180,7 +175,6 @@ def get_relevant_memories(prompt, memory_store, index, k=5):
         
         memory['ranked_score'] = memory['importance_score'] * decay
         memory['similarity_score'] = 1 / (1 + distance)  # Inverse distance for higher similarity
-        
         ranked_memories.append(memory)
 
     ranked_memories = sorted(ranked_memories, key=lambda x: x['ranked_score'], reverse=True)
@@ -188,10 +182,9 @@ def get_relevant_memories(prompt, memory_store, index, k=5):
     # Update access count and importance
     for idx in indices[0]:
         memory_store[idx]['access_count'] += 1
+        update_memory_importance(memory_store[idx])
 
-    # Update memory importance
-    memory_store = [update_memory_importance(memory) for memory in memory_store]
-    
+    # Update memory store with decayed importance    
     memory_store =  [decay_memory(memory) for memory in memory_store]
     return ranked_memories, indices, distances
 
@@ -219,5 +212,6 @@ if __name__ == "__main__":
         print("-" * 50)
 
     # Cleanup and save updated memory store
-    memory_store = cleanup_memory_store(memory_store)
+    memory_store, faiss_index = cleanup_memory_store(memory_store)
     save_memory_store(memory_store)
+    save_faiss_index(faiss_index)

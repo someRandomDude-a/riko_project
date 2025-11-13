@@ -5,55 +5,42 @@ import numpy as np
 from faster_whisper import WhisperModel
 import torch
 import time
-
 # Global Silero VAD model cache for performance
-_CACHED_VAD_MODEL = None
+vad_model = None
 
-def get_silero_vad_model():
-    """
-    Load and cache Silero VAD model globally for performance
-    """
-    global _CACHED_VAD_MODEL
+
+try:
+    # Pip method
+    print("Loading Silero VAD model...")
+    from silero_vad import load_silero_vad, get_speech_timestamps
+    # Load model
     
-    # Return cached model if loaded
-    if _CACHED_VAD_MODEL is not None:
-        return _CACHED_VAD_MODEL
+    model = load_silero_vad()
+    print("Silero VAD model loaded.")
+    # Soundfile backend read function
+    def read_audio_with_soundfile(file_path):
+        audio, sample_rate = sf.read(file_path)
+        # Convert to torch tensor
+        return torch.from_numpy(audio).float()
     
-    try:
-        # Pip method
-        from silero_vad import load_silero_vad, get_speech_timestamps
-        
-        # Load model
-        model = load_silero_vad()
-        
-        # Soundfile backend read function
-        def read_audio_with_soundfile(file_path):
-            audio, sample_rate = sf.read(file_path)
-            # Convert to torch tensor
-            return torch.from_numpy(audio).float()
-        
-        # Cache for fast reuse
-        _CACHED_VAD_MODEL = {
-            'model': model,
-            'read_audio': read_audio_with_soundfile,
-            'get_speech_timestamps': get_speech_timestamps
-        }
-        
-        return _CACHED_VAD_MODEL
-        
-    except ImportError:
-        print("Install: pip install silero-vad soundfile torch")
-        return None
+    # Cache for fast reuse
+    vad_model = {
+        'model': model,
+        'read_audio': read_audio_with_soundfile,
+        'get_speech_timestamps': get_speech_timestamps
+    }
+    
+    
+except ImportError:
+    print("Install: pip install silero-vad soundfile torch")
+
+
 
 def silero_vad_detection(audio_chunk, vad_model, sampling_rate=16000, threshold=0.5):
-    """
-    Use Silero VAD for speech detection
-    """
-    if vad_model is None:
-        # Fallback to basic energy detection
-        rms = np.sqrt(np.mean(audio_chunk**2))
-        return rms > threshold
-    
+
+    # Use Silero VAD for speech detection
+
+
     try:
         # Convert audio chunk to tensor and ensure correct format
         if sampling_rate != 16000:
@@ -78,41 +65,24 @@ def silero_vad_detection(audio_chunk, vad_model, sampling_rate=16000, threshold=
         
         # If we found speech in this chunk, return True
         return len(speech_timestamps) > 0
-        
-    except ImportError:
-        print("⚠️ scipy not available, falling back to energy detection")
-        rms = np.sqrt(np.mean(audio_chunk**2))
-        return rms > threshold
     except Exception as e:
         print(f"VAD error: {e}, using energy detection")
-        # Fallback to energy detection
-        rms = np.sqrt(np.mean(audio_chunk**2))
-        return rms > threshold
-
-def record_and_transcribe(model, output_file="recording.wav", samplerate=44100):
-    """
-    Smart recorder with Silero VAD: automatically detect speech -> record -> transcribe -> return text
+        return None
     
-    Same function signature as your original implementation:
-    - model: WhisperModel instance
-    - output_file: Output audio file path  
-    - samplerate: Audio sampling rate
-    - Returns: transcription string (same as original)
-    """
+def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
     # Remove existing file
     if os.path.exists(output_file):
         os.remove(output_file)
     
-    print("🎤 Smart recording mode with Silero VAD - speak naturally!")
     print("⏳ Listening for speech...")
     
     # Load VAD model (cached globally for performance)
-    vad_model = get_silero_vad_model()
+    global vad_model
     
     # Audio recording parameters
     chunk_duration = 0.5  # Process audio in 0.5 second chunks
     chunk_size = int(samplerate * chunk_duration)
-    min_speech_duration = 1.5  # Minimum seconds of speech to record
+    min_speech_duration = 1  # Minimum seconds of speech to record
     silence_timeout = 2.0  # Stop recording after X seconds of silence
     max_silence_samples = int(silence_timeout / chunk_duration)
     
@@ -170,7 +140,7 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=44100):
     
     # Start recording stream
     with sd.InputStream(samplerate=samplerate, channels=1, dtype='float32', 
-                      callback=callback, blocksize=chunk_size):
+                        callback=callback, blocksize=chunk_size):
         # Keep stream alive until should_stop is set
         while not should_stop:
             time.sleep(0.1)
@@ -185,23 +155,28 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=44100):
     # Combine all audio chunks
     recording = np.concatenate(audio_data, axis=0)
     
-    print("💾 Saving audio...")
+    #print("💾 Saving audio...")
     
     # Write the file
-    sf.write(output_file, recording, samplerate)
+    # sf.write(output_file, recording, samplerate)
     
     print("🎯 Transcribing...")
     
-    # Transcribe using faster-whisper (same as your original)
-    segments, info = model.transcribe(output_file, beam_size=5)
+    # Transcribe using faster-whisper
+    segments, info = model.transcribe(recording, beam_size=5, vad_filter =False)
     transcription = " ".join([segment.text for segment in segments])
     
     print(f"Transcription: {transcription}")
     return transcription.strip()
 
 
-# Example usage - EXACT SAME as your original
+# Test code
 if __name__ == "__main__":
-    model = WhisperModel("distil-large-v3", device="cuda", compute_type="int8_float16")
-    result = record_and_transcribe(model)
-    print(f"Got: '{result}'")
+    print("Testing auto transcriber with VAD...")
+    model = WhisperModel("distil-small.en", device="cuda", compute_type="int8_float16")
+    result = ""
+    print("Say 'Stop.' to exit.")
+    while result != "Stop.":
+        result = record_and_transcribe(model)
+        #print(f"Got: '{result}'")
+    print("Heard Stop, Exiting...")
