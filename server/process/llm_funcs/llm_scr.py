@@ -150,10 +150,10 @@ def get_riko_response_no_tool(messages):
     return response
 
 
-def llm_response(user_input):
+def llm_response(user_input, time_now = datetime.now().isoformat(timespec='seconds')):
     """Handles user input, manages context, queries memory, and returns model output."""
 
-    handle_rolling_window(datetime.now().isoformat(timespec='seconds'))
+    handle_rolling_window(time_now)
 
     
     messages = SYSTEM_PROMPT[:]  # Start with system prompt
@@ -174,7 +174,7 @@ def llm_response(user_input):
     messages.append({
         "role": "user",
         "content": [
-            {"type": "input_text", "text": user_input + " timestamp:" + datetime.now().isoformat(timespec='seconds')}
+            {"type": "input_text", "text": user_input + " timestamp:" + time_now}
         ]
     })
     
@@ -189,7 +189,7 @@ def llm_response(user_input):
     messages.append({
     "role": "assistant",
     "content": [
-        {"type": "output_text", "text": riko_test_response + " timestamp:" + datetime.now().isoformat(timespec='seconds')}
+        {"type": "output_text", "text": riko_test_response + " timestamp:" + time_now}
     ]    
     })
     # Remove the system prompt from the messages (splice the list directly)

@@ -9,4 +9,3 @@ memory_store.json
 faiss_index.index
 *.pyc
 /screenshots
-server/discord_bot.py
