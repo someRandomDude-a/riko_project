@@ -34,17 +34,21 @@ MEMORY_IMPORTANCE_THRESHOLD = char_config['RAG_params']['memory_importance_thres
 # Load SentenceTransformer model
 model = SentenceTransformer(MODEL_NAME)
 
-summarizerPipeline = pipeline("summarization",model=BART_MODEL_NAME)
-
+summarizerPipeline = None
 
 # Function to summarize memory using BART
-
 def summarize_text(text):
+    print("Summarizer called!")
     global summarizerPipeline
-    summary = summarizerPipeline(text,max_length= SUMMARY_MAX_LENGTH, min_length=SUMMARY_MIN_LENGTH)
+    if summarizerPipeline is None:
+        summarizerPipeline = pipeline("summarization",model=BART_MODEL_NAME,torch_dtype=torch.float16)
+
+    
+    summary = summarizerPipeline(text,num_beams=SUMMARY_NUM_BEAMS,max_length= SUMMARY_MAX_LENGTH, min_length=SUMMARY_MIN_LENGTH,truncation=True)
     summary_text = ""
     for text in summary:
         summary_text += text['summary_text']
+    
     return summary_text
 
 
@@ -55,7 +59,7 @@ def load_memory_store():
             memory_store = json.load(f)
         print(f"Loaded {len(memory_store)} memories from file.")
     else:
-        currentTime = datetime.now().isoformat(timespec='seconds')
+        currentTime = datetime.now().isoformat(timespec='minutes')
         memory_store = [
             {"text": "I Love Senpai very much", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
             {"text": "I am Riko", "importance_score": 0.7, "timestamp": currentTime, "access_count": 0, "detailed": True},
@@ -126,7 +130,8 @@ def decay_memory(memory):
     memory['importance_score'] *= decay
 
     # Transition from detailed to summarized when importance is low
-    if memory['importance_score'] < 0.3 and memory['detailed']:  # Low importance, summarized
+    if memory['importance_score'] < 0.3 and memory['detailed'] and len(memory['text']) > 300:  # Low importance, summarized
+        print("summarizing memory: " + memory['text'])
         memory['text'] = summarize_text(memory['text'])
         memory['detailed'] = False
         
