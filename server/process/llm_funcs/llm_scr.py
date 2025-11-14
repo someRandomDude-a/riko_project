@@ -63,7 +63,7 @@ def save_history(history):
 
 
 # === Send old messages to long-term memory ===
-def add_message_to_memory(message_text, message_time=datetime.now().isoformat(timespec='seconds')):
+def add_message_to_memory(message_text, message_time=datetime.now().isoformat(timespec='minutes')):
     """Adds a message to long-term memory with default importance."""
     global memory_store, faiss_index
     
@@ -110,7 +110,7 @@ def handle_rolling_window(time_exceeded):
         message_time = message_text.split(" timestamp:")[-1]
         message_text = message_text.rsplit(" timestamp:", 1)[0]
         if message_time.strip() == "":
-            message_time = datetime.now().isoformat(timespec='seconds')    
+            message_time = datetime.now().isoformat(timespec='minutes')    
             
         add_message_to_memory(message_text,message_time)
     print("[INFO] Context window managed. Updated history saved. final history token count: ",approx_token_count)
@@ -150,7 +150,7 @@ def get_riko_response_no_tool(messages):
     return response
 
 
-def llm_response(user_input, time_now = datetime.now().isoformat(timespec='seconds')):
+def llm_response(user_input, time_now = datetime.now().isoformat(timespec='minutes')):
     """Handles user input, manages context, queries memory, and returns model output."""
 
     handle_rolling_window(time_now)

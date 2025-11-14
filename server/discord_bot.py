@@ -33,7 +33,7 @@ def process_message(message):
         print(f"Received: {user_text}")
 
         try:
-            timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='seconds')
+            timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='minutes')
             response = llm_response(user_text,timestamp)
         except Exception as e:
             response = f"⚠️ Error: {e}"
@@ -69,7 +69,7 @@ async def on_message(message):
         print(f"Received: {user_text}")
 
         try:
-            timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='seconds')
+            timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='minutes')
             response = llm_response(user_text,timestamp)
         except Exception as e:
             response = f"⚠️ Error: {e}"
