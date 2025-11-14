@@ -9,3 +9,4 @@ memory_store.json
 faiss_index.index
 *.pyc
 /screenshots
+.env
