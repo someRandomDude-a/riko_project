@@ -8,15 +8,14 @@ from datetime import datetime, timedelta
 # Config:
 
 load_dotenv()
-
 time_offset = timedelta(hours=5, minutes=30)
 
 TOKEN = os.getenv("Discord_bot_token") 
-CHANNEL_ID = int(os.getenv("Discord_bot_channel_id"))
-print("Channel ID: ",CHANNEL_ID)
+# CHANNEL_ID = int(os.getenv("Discord_bot_channel_id"))
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+channel_whitelist = []
 
 def process_message(message):
     # Ignore messages from the bot itself
@@ -60,12 +59,12 @@ async def on_message(message):
         return
     print(message.channel.id , message.author.name + "\t" + message.content +  "\t")
     # Only respond in the target channel
-    if message.channel.id  == CHANNEL_ID:
+    if message.channel.id  in channel_whitelist:
         
         if message.content[0] != '&':
             return
         message.content = message.content[1:]
-        user_text = f"({message.author.display_name}): {message.content}"
+        user_text = f"{message.author.display_name}: {message.content}"
         print(f"Received: {user_text}")
 
         try:
