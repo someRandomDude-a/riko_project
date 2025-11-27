@@ -61,13 +61,15 @@ def load_memory_store():
     else:
         currentTime = datetime.now().isoformat(timespec='minutes')
         memory_store = [
-            {"text": "I Love Senpai very much", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
-            {"text": "I am Riko", "importance_score": 0.7, "timestamp": currentTime, "access_count": 0, "detailed": True},
-            {"text": "I should use jokes and sarcasm ", "importance_score": 0.8, "timestamp": currentTime, "access_count": 0, "detailed": True},
-            {"text": "I like to tease Senpai", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
-            {"text": "I love spending time with Senpai", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "Riko: I Love Senpai very much", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "Riko: I am Riko", "importance_score": 0.7, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "Riko: I should use jokes and sarcasm ", "importance_score": 0.8, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "Riko: I like to tease Senpai", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
+            {"text": "Riko: I love spending time with Senpai", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
             ]
         print("No memory store found, using default memories.")
+        #save_memory_store(memory_store) #We don't actually need to save unless we have new memories
+        #Its faster to use default memories directly if no new memories need to be loaded from file
     return memory_store
 
 # Save memory store to disk
