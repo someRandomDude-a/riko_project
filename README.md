@@ -81,8 +81,8 @@ uv pip install -r requirements.txt
 ## 🧪 Usage
 
 ### 1. Launch the GPT-SoVITS API  
-
-### 2. Run the main script  
+### 2. Run LM - Studio and its API
+### 3. Run the main script  
 
 
 ```bash
