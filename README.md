@@ -2,7 +2,7 @@
 
 ## ✨ Features
 
-- 💬 **LLM-based dialogue** using OpenAI API (configurable system prompts)
+- 💬 **LLM-based dialogue** using LM Studio API (configurable system prompts)
 - 🧠 **Conversation memory** to keep context during interactions
 - 🔊 **Voice generation** via GPT-SoVITS API
 - 🎧 **Speech recognition** using Faster-Whisper
