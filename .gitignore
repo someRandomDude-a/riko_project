@@ -10,3 +10,5 @@ faiss_index.index
 *.pyc
 /screenshots
 .env
+*.pyc
+faiss_index.index
