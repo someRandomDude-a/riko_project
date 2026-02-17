@@ -12,3 +12,4 @@ faiss_index.index
 .env
 *.pyc
 faiss_index.index
+*.pyc

@@ -189,7 +189,7 @@ def llm_response(user_input, time_now = datetime.now().isoformat(timespec='minut
     ]    
     })
     # Remove the system prompt from the messages (splice the list directly)
-    messages = messages[1:]  # Skip the first element as it's the system setup message
+    messages = messages[2:]  # Skip the first element as it's the system setup message
     # Change from 1 to 2 to also skip RAG system messages from being appended to history
     save_history(messages) # The part where we actually save the history from llm response
     # print(riko_test_response.output_text)

@@ -18,8 +18,8 @@ with open('character_config.yaml', 'r') as f:
 # Constants (now converted to variables)
 MODEL_NAME = char_config['RAG_params']['embedding_model_id']  # Sentence-BERT model name
 BART_MODEL_NAME = char_config['RAG_params']['summarization_model_id']   # BART model name for summarization
-FAISS_INDEX_PATH = 'faiss_index.index'  # File path for FAISS index
-MEMORY_STORE_PATH = 'memory_store.json'  # File path for memory store
+FAISS_INDEX_PATH = './persistant_memories/faiss_index.index'  # File path for FAISS index
+MEMORY_STORE_PATH = './persistant_memories/memory_store.json'  # File path for memory store
 EMBEDDING_DIM = char_config['RAG_params']['text_embedding_dim']  # Embedding dimension from config  
 FAISS_DECAY_FACTOR_HIGH = char_config['RAG_params']['high_importance_decay_factor']  # Decay factor for high-importance memories
 FAISS_DECAY_FACTOR_LOW = char_config['RAG_params']['low_importance_decay_factor']   # Decay factor for low-importance memories
@@ -58,19 +58,26 @@ def load_memory_store():
         with open(MEMORY_STORE_PATH, 'r') as f:
             memory_store = json.load(f)
         print(f"Loaded {len(memory_store)} memories from file.")
-    else:
+
+    else:        
+        # Fetch default memories
+        default_memories = char_config["presets"]["default"]["memories"]
+
+        # Build memory store dynamically
         currentTime = datetime.now().isoformat(timespec='minutes')
-        memory_store = [
-            {"text": "Riko: I Love Senpai very much", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
-            {"text": "Riko: I am Riko", "importance_score": 0.7, "timestamp": currentTime, "access_count": 0, "detailed": True},
-            {"text": "Riko: I should use jokes and sarcasm ", "importance_score": 0.8, "timestamp": currentTime, "access_count": 0, "detailed": True},
-            {"text": "Riko: I like to tease Senpai", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
-            {"text": "Riko: I love spending time with Senpai", "importance_score": 0.9, "timestamp": currentTime, "access_count": 0, "detailed": True},
-            ]
-        print("No memory store found, using default memories.")
-        #save_memory_store(memory_store) #We don't actually need to save unless we have new memories
-        #Its faster to use default memories directly if no new memories need to be loaded from file
+
+        memory_store = []
+        for mem in default_memories:
+            memory_store.append({
+                "text": mem["text"],
+                "importance_score": mem["importance_score"],
+                "timestamp": currentTime,
+                "access_count": mem.get("access_count", 0),
+                "detailed": mem.get("detailed", False),
+            })
+        print("No memories found, Loaded memory store from YAML.")
     return memory_store
+
 
 # Save memory store to disk
 def save_memory_store(memory_store):
