@@ -74,6 +74,35 @@ async def clear_history(ctx):
  
     await ctx.send("✅ Chat history cleared.")
 
+@bot.command()
+async def cleardm(ctx, amount: int):
+    """
+    Deletes the last X messages sent by the bot in this DM.
+    Usage: !cleardm 10
+    """
+
+    # Ensure it's a DM
+    if not isinstance(ctx.channel, discord.DMChannel):
+        await ctx.send("❌ This command only works in DMs.")
+        return
+
+    deleted = 0
+
+    async for message in ctx.channel.history(limit=200):
+        if message.author == bot.user:
+            try:
+                await message.delete()
+                deleted += 1
+                await asyncio.sleep(0.6)  # Prevent rate limits
+            except:
+                pass
+
+            if deleted >= amount:
+                break
+
+    await ctx.send(f"✅ Deleted {deleted} of my messages.")
+
+
 @bot.event
 async def on_ready():
     global discord_loop
