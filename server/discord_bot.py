@@ -120,14 +120,14 @@ async def on_message(message):
     # Only respond in the target channel
     if message.channel.id  in channel_whitelist:
         
-        if message.content[0] != '&':
+        if message.content[0] == '!':
             await bot.process_commands(message)
             return
         
-        
-        llm_response_queue.put(message)
-        await message.add_reaction("⏳")
-        return
+        else:
+            llm_response_queue.put(message)
+            await message.add_reaction("⏳")
+            return
     # Keep commands working
 
 bot.run(TOKEN)
