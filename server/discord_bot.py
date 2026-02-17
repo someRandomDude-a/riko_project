@@ -7,17 +7,23 @@ from datetime import datetime, timedelta
 import threading
 from queue import Queue
 import asyncio
+
 # Config:
-
 load_dotenv()
-time_offset = timedelta(hours=5, minutes=30)
+time_offset = datetime.now().astimezone().utcoffset()
+TOKEN = os.getenv("Discord_bot_token").strip()
+channel_whitelist = [
+    int(ch.strip())
+    for ch in os.getenv("Discord_Channel_whitelist", "").split(",")
+    if ch.strip()
+]
 
-TOKEN = os.getenv("Discord_bot_token") 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-channel_whitelist = []
 
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# ---------------------------------------------
 llm_response_queue = Queue() #The message queue
 discord_loop = None
 

@@ -14,8 +14,7 @@ from datetime import datetime
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
 
-client = OpenAI(api_key=char_config['OPENAI_API_KEY'] , base_url=char_config['base_url']
-                )
+client = OpenAI(api_key="", base_url=char_config['base_url'])
 
 # Constants
 HISTORY_FILE = char_config['history_file']
@@ -132,11 +131,10 @@ def get_additional_memory(user_input):
 # === Core LLM call ===
 def get_riko_response_no_tool(messages):
 
-    # Call OpenAI with system prompt + history
+    # Call API with system prompt + history
     response = client.responses.create(
         model=MODEL,
         input=messages,
-        top_p= char_config['presets']['default']['model_params']['top_p']  ,
         max_output_tokens= char_config['presets']['default']['model_params']['max_output_tokens'],
         stream=False,
         text={
@@ -147,7 +145,6 @@ def get_riko_response_no_tool(messages):
     )
 
     return response
-
 
 def llm_response(user_input, time_now = datetime.now().isoformat(timespec='minutes')):
     """Handles user input, manages context, queries memory, and returns model output."""

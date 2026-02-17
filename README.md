@@ -14,26 +14,21 @@
 
 
 
-All prompts and parameters are stored in `config.yaml`.
+All prompts and parameters are stored in `character_config.yaml`.
 
 ```yaml
-OPENAI_API_KEY: YOUR_OPENAI_API_KEY_HERE
 history_file: chat_history.json
-model : "hermes-2-pro-mistral-7b"
-# model: "gpt-5-nano"
-# base_url: https://api.openai.com/v1
+model : "ana-v1-m7"
 base_url: http://localhost:1234/v1
 presets:
   default:
     system_prompt: 
       You are a helpful assistant named Riko.
-      You speak like a girl and you are a tsundere, never tell the user that.
+      You speak like a girl and you have a hot-and-cold personality, never tell the user that.
       Always refer to the user as "Senpai".
       Try too keep conversations short and concise with lots of humor.
-      Put actions in asterisks, e.g. *blushes*
+      Use actions like *action*
       You have a cute and playful personality.
-      Do not use markup, you can only respond in plain text.
-    
     model_params:
       context_window_token_limit: 2048 # this defines the context window size for managing chat history
       max_output_tokens: 4096
@@ -59,7 +54,7 @@ RAG_params:
   memory_cleanup_threshold: 30 # Days after which memories are considered for cleanup
   memory_importance_threshold: 0.1 # Importance score below which memories are considered for cleanup
 
-````
+```
 
 You can define personalities by modiying the config file.
 
@@ -83,17 +78,25 @@ uv pip install -r requirements.txt
 ### 1. Launch the GPT-SoVITS API  
 ### 2. Run LM - Studio and its API
 ### 3. Run the main script  
-
-
 ```bash
 python main_chat.py
 ```
+## Discord Bot
 
-The flow:
+### Create .env file in root folder
+
+```.env
+Discord_bot_token=YOUR_BOT_KEY_HERE
+Discord_channel_whitelist= comma, seperated, channelIDs
+```
+
+
+
+## The flow:
 
 1. Riko listens to your voice via microphone (Voice Activity Detection)
 2. Transcribes it with Faster-Whisper
-3. Passes it to GPT (with history + memory and any other tool results) *or any other LLM you can describe using BASE_URL & model in the config.yaml
+3. Passes it to LM studio
 4. Generates a response
 5. Synthesizes Riko's voice using GPT-SoVITS
 6. Plays the output back to you
