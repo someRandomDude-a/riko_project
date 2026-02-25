@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import threading
 from queue import Queue
 import asyncio
+from process.llm_funcs.pdf_processor import pdf_text_extract
 
 # Config:
 load_dotenv()
@@ -38,6 +39,22 @@ def worker():
         
 
         user_text = f"{message.author.display_name}: {message.content}"
+
+        # handle attachments
+        for attachment in message.attachments:
+            if attachment.content_type == "application/pdf":
+                try:
+                    pdf_byte = asyncio.run_coroutine_threadsafe(
+                        attachment.read(),
+                        discord_loop
+                    ).result()
+                    pdf_text = pdf_text_extract(pdf_byte)
+                    pdf_text = pdf_text[:100000] #limit max size
+                    user_text += f"\n\n[PDF CONTENT START]\n{pdf_text}\n[PDF CONTENT END]\n"
+                    
+                except Exception as e:
+                    user_text += f"\n\nFailed to process PDF: {e}"
+            
         print(f"Received: {user_text}")
         try:
             timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='minutes')

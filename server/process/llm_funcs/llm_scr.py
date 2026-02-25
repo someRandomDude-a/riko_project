@@ -119,6 +119,7 @@ def handle_rolling_window(time_exceeded):
 # === Retrieve relevant memories for new prompt ===
 def get_additional_memory(user_input):
     # Query long-term memory for related past experiences.
+    print("fetching relevant long term memories")
     ranked_memories, _, _ = get_relevant_memories(user_input, memory_store, faiss_index)
     top_k = char_config['RAG_params']['default_top_k']    
     top_memories = ranked_memories[:top_k]  # Top-K relevant memories
@@ -174,13 +175,13 @@ def llm_response(user_input, time_now = datetime.now().isoformat(timespec='minut
         ]
     })
     
-    print("\n\nRiko Response: ", messages, "\n\n")
+    print("\n\nFinal prompt: ", messages, "\n\n")
         
     # Send request to LLM
     riko_test_response = get_riko_response_no_tool(messages)
     
     #This is basically us replacing the AI's parroted timestamp with an accurate timestamp
-    riko_test_response = riko_test_response.output_text.rsplit("timestamp:",1)[0].strip() # stop the AI from parroting the timestamps
+    riko_test_response = riko_test_response.output_text.rsplit("timestamp:",1)[0].strip()
     # Save assistant's response
     messages.append({
     "role": "assistant",
@@ -194,7 +195,3 @@ def llm_response(user_input, time_now = datetime.now().isoformat(timespec='minut
     save_history(messages) # The part where we actually save the history from llm response
     # print(riko_test_response.output_text)
     return riko_test_response
-
-
-if __name__ == "__main__":
-    print('running as main \n this is not supported, please run main_chat.py instead')

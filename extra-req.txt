@@ -7,3 +7,4 @@ transformers
 silero-vad
 pillow
 discord.py
+pypdf
