@@ -1,4 +1,4 @@
-from process.llm_funcs.llm_scr import llm_response
+from process.llm_funcs.llm_scr import Riko_Response
 from discord.ext import commands
 import discord
 import os
@@ -59,7 +59,7 @@ def worker():
         try:
             timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='minutes')
             
-            response = llm_response(user_text, timestamp)
+            response = Riko_Response(user_text, timestamp)
             
         except Exception as e:
             response = f"⚠️ Error: {e}"

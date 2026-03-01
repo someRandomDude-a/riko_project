@@ -1,7 +1,7 @@
 from faster_whisper import WhisperModel
 #from process.asr_func.asr_push_to_talk import record_and_transcribe # we replace this with vad version
 from process.asr_func.auto_transcriber import record_and_transcribe # our new VAD version
-from process.llm_funcs.llm_scr import llm_response
+from process.llm_funcs.llm_scr import Riko_Response
 
 ##Variable to set streaming mode or normal mode for sovits gen
 streamSovitsGen = True
@@ -32,7 +32,7 @@ while True:
         user_spoken_text = "Senpai: " + record_and_transcribe(whisper_model, conversation_recording)
 
         ### pass to LLM and get a LLM output.
-        tts_read_text = llm_response(user_spoken_text)
+        tts_read_text = Riko_Response(user_spoken_text)
 
         print(tts_read_text)
         ### file organization 

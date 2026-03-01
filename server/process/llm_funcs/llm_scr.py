@@ -31,10 +31,10 @@ SYSTEM_PROMPT =  [
         }
     ]
 
-MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']  # Approximate context window limit, adjust for your model
+MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
 
 # === Initialize RAG Memory System ===
-embedding_dim = char_config['RAG_params']['text_embedding_dim']  # Sentence-BERT ('all-MiniLM-L6-v2') output dimension
+embedding_dim = char_config['RAG_params']['text_embedding_dim']
 memory_store = load_memory_store()
 faiss_index = load_faiss_index(embedding_dim)
 
@@ -90,8 +90,8 @@ def add_message_to_memory(message_text, message_time=datetime.now().isoformat(ti
 
 # === Handle context overflow ===
 def handle_rolling_window(time_exceeded):
-    
     """When context window is full, archive old messages into long-term memory."""
+
     # print(f"[INFO] Context window exceeded at {time_exceeded}. Archiving old messages.")
     history = load_history()
     if not history:
@@ -101,38 +101,45 @@ def handle_rolling_window(time_exceeded):
         approx_token_count = sum(len(msg["content"][0]["text"].split()) for msg in history)
         if approx_token_count <= MAX_HISTORY_TOKENS:
             break
-        # Pop oldest non-system message and store it
+
+        # Pop oldest non-system message
         dropped_message = history.pop(0)
         if dropped_message["role"] == "system":
             continue
-        message_text = ":".join([dropped_message["role"], dropped_message["content"][0]["text"]])
-        message_time = message_text.split(" timestamp:")[-1]
-        message_text = message_text.rsplit(" timestamp:", 1)[0]
-        if message_time.strip() == "":
-            message_time = datetime.now().isoformat(timespec='minutes')    
-            
+
+        message = ":".join([dropped_message["role"], dropped_message["content"][0]["text"]])
+        message_text = message.split(" timestamp:", 1)[0]
+        message_time = message.rsplit(" timestamp:", 1)[-1].strip()
+
+        # ensure every message has a valid timestamp
+        try:
+            datetime.fromisoformat(message_time)
+        except ValueError:
+            message_time = datetime.now().isoformat(timespec="minutes")
+
         add_message_to_memory(message_text,message_time)
     print("[INFO] Context window managed. Updated history saved. final history token count: ",approx_token_count)
     save_history(history)
 
 
 # === Retrieve relevant memories for new prompt ===
-def get_additional_memory(user_input):
-    # Query long-term memory for related past experiences.
+def get_RAG_context(user_input):
+    """
+      Query long-term memory for related past experiences.
+    """
     print("fetching relevant long term memories")
     ranked_memories, _, _ = get_relevant_memories(user_input, memory_store, faiss_index)
     top_k = char_config['RAG_params']['default_top_k']    
     top_memories = ranked_memories[:top_k]  # Top-K relevant memories
     if not top_memories:
         return ""
+    
     memory_snippets = ",".join([f"[({m['text']} timestamp:{m['timestamp']})" for m in top_memories])
     return f"Relevant memories:[{memory_snippets}]"
 
 
 # === Core LLM call ===
-def get_riko_response_no_tool(messages):
-
-    # Call API with system prompt + history
+def call_llm_api(messages):
     response = client.responses.create(
         model=MODEL,
         input=messages,
@@ -144,29 +151,28 @@ def get_riko_response_no_tool(messages):
             }
         },
     )
-
     return response
 
-def llm_response(user_input, time_now = datetime.now().isoformat(timespec='minutes')):
-    """Handles user input, manages context, queries memory, and returns model output."""
+def Riko_Response(user_input, time_now = datetime.now().isoformat(timespec='minutes')):
+    """
+    Handles user input, manages context, queries memory, and returns model output.
+    """
 
     handle_rolling_window(time_now)
-
-    
     messages = SYSTEM_PROMPT[:]  # Start with system prompt
+
+    memory_text = get_RAG_context(user_input)
     
-    # 🧠 Retrieve relevant RAG context
-    memory_text = get_additional_memory(user_input)
     if memory_text:
         messages.append({
             "role": "system",
             "content": [{"type": "input_text", "text": memory_text}]
-        })
-        
+        })    
     
     history = load_history()
     if history:
-        messages.extend(history)# Load history excluding system prompt
+        messages.extend(history)
+
     # Add new user message
     messages.append({
         "role": "user",
@@ -175,23 +181,23 @@ def llm_response(user_input, time_now = datetime.now().isoformat(timespec='minut
         ]
     })
     
-    print("\n\nFinal prompt: ", messages, "\n\n")
-        
-    # Send request to LLM
-    riko_test_response = get_riko_response_no_tool(messages)
+    # print("\n\nFinal prompt: ", messages, "\n\n") # This print command can cause a lot of lag, only use for debugging
+    response = call_llm_api(messages)
     
     #This is basically us replacing the AI's parroted timestamp with an accurate timestamp
-    riko_test_response = riko_test_response.output_text.rsplit("timestamp:",1)[0].strip()
+    response = response.output_text.rsplit("timestamp:",1)[0].strip()
     # Save assistant's response
     messages.append({
     "role": "assistant",
     "content": [
-        {"type": "output_text", "text": riko_test_response + " timestamp:" + time_now}
+        {"type": "output_text", "text": response + " timestamp:" + time_now}
     ]    
     })
+
     # Remove the system prompt from the messages (splice the list directly)
     messages = messages[2:]  # Skip the first element as it's the system setup message
     # Change from 1 to 2 to also skip RAG system messages from being appended to history
+
     save_history(messages) # The part where we actually save the history from llm response
-    # print(riko_test_response.output_text)
-    return riko_test_response
+    print(response.output_text)
+    return response
