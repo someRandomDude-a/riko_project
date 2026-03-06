@@ -127,7 +127,7 @@ def get_RAG_context(user_input):
     """
       Query long-term memory for related past experiences.
     """
-    print("fetching relevant long term memories")
+    # print("fetching relevant long term memories....")
     ranked_memories, _, _ = get_relevant_memories(user_input, memory_store, faiss_index)
     top_k = char_config['RAG_params']['default_top_k']    
     top_memories = ranked_memories[:top_k]  # Top-K relevant memories
@@ -185,7 +185,7 @@ def Riko_Response(user_input, time_now = datetime.now().isoformat(timespec='minu
     response = call_llm_api(messages)
     
     #This is basically us replacing the AI's parroted timestamp with an accurate timestamp
-    response = response.output_text.rsplit("timestamp:",1)[0].strip()
+    response = response.output_text.rsplit("timestamp:")[0].strip()
     # Save assistant's response
     messages.append({
     "role": "assistant",
@@ -197,7 +197,6 @@ def Riko_Response(user_input, time_now = datetime.now().isoformat(timespec='minu
     # Remove the system prompt from the messages (splice the list directly)
     messages = messages[2:]  # Skip the first element as it's the system setup message
     # Change from 1 to 2 to also skip RAG system messages from being appended to history
-
     save_history(messages) # The part where we actually save the history from llm response
-    print(response.output_text)
+    print(response)
     return response

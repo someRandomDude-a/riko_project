@@ -1,6 +1,5 @@
 from faster_whisper import WhisperModel
-#from process.asr_func.asr_push_to_talk import record_and_transcribe # we replace this with vad version
-from process.asr_func.auto_transcriber import record_and_transcribe # our new VAD version
+from process.asr_func.auto_transcriber import record_and_transcribe
 from process.llm_funcs.llm_scr import Riko_Response
 
 ##Variable to set streaming mode or normal mode for sovits gen
@@ -37,16 +36,16 @@ while True:
         print(tts_read_text)
         ### file organization 
 
-        # 1. Generate a unique filename
+        # Generate a unique filename
         uid = uuid.uuid4().hex
         filename = f"output_{uid}.wav"
         output_wav_path = Path("audio") / filename
         output_wav_path.parent.mkdir(parents=True, exist_ok=True)
 
         # generate audio and save it to client/audio 
-        # Remove timestamp from tts_read_text before passing it spoken text part that we care about->timestamp
+        # Remove timestamp from tts_read_text before passing it spoken text part that we care about ->  timestamp
         
-        tts_read_text = tts_read_text.split("timestamp:")[0].strip()
+        tts_read_text = tts_read_text.rsplit("timestamp:", 1)[0].strip()
         #for non streaming, use this:
         try:
             if streamSovitsGen:
