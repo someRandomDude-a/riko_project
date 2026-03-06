@@ -11,9 +11,6 @@
 
 ## ⚙️ Configuration
 
-
-
-
 All prompts and parameters are stored in `character_config.yaml`.
 
 ```yaml
@@ -88,9 +85,10 @@ You can define personalities by modiying the config file.
 
 ### Install Dependencies
 
+This project uses Python 3.14
+
 ```bash
 pip install uv 
-uv pip install -r extra-req.txt
 uv pip install -r requirements.txt
 ```
 
@@ -101,12 +99,14 @@ uv pip install -r requirements.txt
 
 ## 🧪 Usage
 
-### 1. Launch the GPT-SoVITS API  
-### 2. Run LM - Studio and its API
-### 3. Run the main script  
+1. Launch the GPT-SoVITS API  
+2. Run LM - Studio and its API
+3. Run the main script
+
 ```bash
 python main_chat.py
 ```
+
 ## Discord Bot
 
 ### Create .env file in root folder
@@ -115,8 +115,6 @@ python main_chat.py
 Discord_bot_token=YOUR_BOT_KEY_HERE
 Discord_channel_whitelist= comma, seperated, channelIDs
 ```
-
-
 
 ## The flow:
 
@@ -128,6 +126,7 @@ Discord_channel_whitelist= comma, seperated, channelIDs
 6. Plays the output back to you
 
 # Goal:
+
 We want too make an RAG based vector database that will store "memories" that the AI model deems important enough too remember
 we will also query this database too retrieve relevant memories from the database as required according too the prompt (eventually it might be done according too what the AI model asks about)
 
@@ -141,6 +140,7 @@ we will also query this database too retrieve relevant memories from the databas
   * Decaying old memories
   * retrieving top-k relevant memories
 * Build the new prompt based on these and passing it to an LLM
+* Read PDF files images and other attachments from discord bot
 
 
 ## 📌 TODO / Future Improvements
@@ -160,4 +160,3 @@ we will also query this database too retrieve relevant memories from the databas
 * Inspired by Riko Project by [Ryan](https://github.com/rayenfeng/riko_project)
 * Voice synthesis powered by [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) - Soon to be replaced with IndexTTS
 * ASR via [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper)
-* Language model via [OpenAI GPT](https://platform.openai.com) -  or any other tool like LM - studio (look at configuration menu)
