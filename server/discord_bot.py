@@ -94,10 +94,10 @@ async def clear_history(ctx):
 @bot.command()
 async def cleardm(ctx, amount: int):
     """
-    Deletes the last X messages sent by the bot in this DM.
+    Deletes the last X messages sent by the bot in this DM. 
     Usage: !cleardm 10
     """
-
+ 
     # Ensure it's a DM
     if not isinstance(ctx.channel, discord.DMChannel):
         await ctx.send("❌ This command only works in DMs.")
