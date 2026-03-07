@@ -154,10 +154,9 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
     
     # Combine all audio chunks
     recording = np.concatenate(audio_data, axis=0)
-    
-    #print("💾 Saving audio...")
-    
+
     # Write the file
+    #print("💾 Saving audio...")
     # sf.write(output_file, recording, samplerate)
     
     print("🎯 Transcribing...")
@@ -178,5 +177,5 @@ if __name__ == "__main__":
     print("Say 'Stop.' to exit.")
     while result != "Stop.":
         result = record_and_transcribe(model)
-        #print(f"Got: '{result}'")
+        print(f"Got: '{result}'")
     print("Heard Stop, Exiting...")

@@ -94,8 +94,6 @@ def sovits_stream(text: str, sample_rate: int = 32000, channels: int = 1, dtype:
         "prompt_lang": char_config['sovits_ping_config']['prompt_lang'],
         "media_type": "raw",
         "streaming_mode": True,
-        "batch_size": 4,
-        "speed": 1.0
     }
 
     response = requests.post(url, json=payload, stream=True)
