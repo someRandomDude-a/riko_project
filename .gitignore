@@ -11,3 +11,4 @@ faiss_index.index
 /screenshots
 .env
 /.venv
+output.wav

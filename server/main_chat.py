@@ -1,19 +1,15 @@
 from faster_whisper import WhisperModel
 from process.asr_func.auto_transcriber import record_and_transcribe
 from process.llm_funcs.llm_scr import Riko_Response
-
-##Variable to set streaming mode or normal mode for sovits gen
-streamSovitsGen = True
-from process.tts_func.sovits_streaming import sovits_gen_stream #Import the streaming mode function
-from process.tts_func.sovits_ping import sovits_gen, play_audio #Import the ping mode functions
+from process.tts_func.sovits_streaming import sovits_stream
 
 from pathlib import Path
+
 
 ### transcribe audio 
 import uuid
 import soundfile as sf
 import sounddevice as sd
-
 
 def get_wav_duration(path):
     with sf.SoundFile(path) as f:
@@ -46,14 +42,8 @@ while True:
         # Remove timestamp from tts_read_text before passing it spoken text part that we care about ->  timestamp
         
         tts_read_text = tts_read_text.rsplit("timestamp:", 1)[0].strip()
-        #for non streaming, use this:
         try:
-            if streamSovitsGen:
-                sovits_gen_stream(tts_read_text)
-            else:
-                gen_aud_path = sovits_gen(tts_read_text, output_wav_path)
-                play_audio(output_wav_path)
-                [fp.unlink() for fp in Path("audio").glob("*.wav") if fp.is_file()]        # clean up audio files
+            sovits_stream(tts_read_text)
         except KeyboardInterrupt as e:
             print(f"[Keyboard Interrupt Called]: {e}")
         

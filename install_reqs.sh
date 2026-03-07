@@ -1,9 +1,5 @@
-### CHECK NVIDIA VERSION WITH NVIDIA-SMI.   UV pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
-### RECOMENDED TO USE VERSION 12.8!
-
 pip install uv
-uv pip install torch==2.8.0 torchaudio --index-url https://download.pytorch.org/whl/cu128
-uv pip install -r extra-req.txt --no-deps
+uv pip install torch==2.10.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cu130
 uv pip install -r requirements.txt
 
 python - <<PYCODE
