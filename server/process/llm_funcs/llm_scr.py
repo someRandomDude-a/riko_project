@@ -11,7 +11,7 @@ from datetime import datetime
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
 
-client = OpenAI(api_key="", base_url=char_config['base_url'])
+client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])
 
 # Constants
 HISTORY_FILE = char_config['history_file']
