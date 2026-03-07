@@ -1,10 +1,7 @@
-# OpenAI tool calling with history 
-### Uses a sample function
 import yaml
 import json
 import os
 from openai import OpenAI
-from typing import cast
 from process.llm_funcs.Memory_system.long_term_memory import load_faiss_index, load_memory_store, add_embeddings_to_faiss, save_faiss_index, save_memory_store, get_relevant_memories, get_embedding 
 import numpy as np
 from datetime import datetime
@@ -198,5 +195,4 @@ def Riko_Response(user_input, time_now = datetime.now().isoformat(timespec='minu
     messages = messages[2:]  # Skip the first element as it's the system setup message
     # Change from 1 to 2 to also skip RAG system messages from being appended to history
     save_history(messages) # The part where we actually save the history from llm response
-    print(response)
     return response
