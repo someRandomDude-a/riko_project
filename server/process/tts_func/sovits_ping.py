@@ -23,7 +23,7 @@ def sovits_gen(in_text, output_wav_pth = "output.wav"):
     payload = {
         "text": in_text,
         "text_lang": char_config['sovits_ping_config']['text_lang'],
-        "ref_audio_path": char_config['sovits_ping_config']['ref_audio_path'],  # Make sure this path is valid
+        "ref_audio_path": char_config['sovits_ping_config']['ref_audio_path'], 
         "prompt_text": char_config['sovits_ping_config']['prompt_text'],
         "prompt_lang": char_config['sovits_ping_config']['prompt_lang']
     }
