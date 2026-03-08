@@ -86,7 +86,7 @@ def call_llm_api(messages):
     return response
 
 
-def Riko_Response(user_input, time_now = datetime.now().isoformat(timespec='minutes')):
+def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec='minutes')):
     """
     Handles user input, manages context, queries memory, and returns model output.
     """

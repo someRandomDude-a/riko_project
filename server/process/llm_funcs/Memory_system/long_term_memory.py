@@ -84,14 +84,16 @@ def load_memory_store():
                     raise ValueError("Memory_store is not a list")
                 print(f"Loaded {len(memory_store)} memories from file.")
 
+                if len(memory_store) != load_faiss_index().ntotal:
+                    index = create_faiss_cpu_index()
+                    add_faiss_embeddings(index, memory_store)
+                    save_faiss_index(index)
+
             except (json.JSONDecodeError, ValueError) as e:
                 print("[WARN] Memory store file is empty or corrupted", e)
                 memory_store = []
 
-    if memory_store.count != load_faiss_index().ntotal:
-        index = create_faiss_cpu_index()
-        add_faiss_embeddings(index, memory_store)
-        save_faiss_index(index)
+    
     
     if memory_store:
         return memory_store
