@@ -45,7 +45,7 @@ def handle_rolling_window():
         print("[INFO] No history to manage.")
         return
     while True:
-        approx_token_count = sum(len(msg["content"][0]["text"].split()) for msg in history)
+        approx_token_count = sum(len(msg["content"][0]["input_text"].split()) for msg in history)
         if approx_token_count <= MAX_HISTORY_TOKENS:
             break
 

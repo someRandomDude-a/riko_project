@@ -112,10 +112,12 @@ def load_memory_store():
             "access_count": mem.get("access_count", 0),
             "detailed": mem.get("detailed", False),
         })
+
+    print("No memories found, Loaded memory store from YAML.")
     index = create_faiss_cpu_index()
     add_faiss_embeddings(index, memory_store)
     save_faiss_index(index)
-    print("No memories found, Loaded memory store from YAML.")
+    save_memory_store(memory_store)
     return memory_store
 
 
@@ -280,7 +282,6 @@ faiss_index = load_faiss_index()
 if faiss_index.ntotal == 0:
     add_faiss_embeddings(faiss_index, memory_store)
     save_faiss_index(faiss_index)
-
 
 
 # Main script execution
