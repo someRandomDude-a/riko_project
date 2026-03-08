@@ -131,7 +131,7 @@ def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec=
     messages.append({
     "role": "assistant",
     "content": [
-        {"type": "input_text", "text": response + " timestamp:" + time_now}
+        {"type": "output_text", "text": response + " timestamp:" + time_now}
     ]    
     })
     messages = messages[1:]  # Skip the first element as it's the system setup message and RAG memories
