@@ -89,7 +89,7 @@ def add_message_to_memory(message_text, message_time=datetime.now().isoformat(ti
 def handle_rolling_window(time_exceeded):
     """When context window is full, archive old messages into long-term memory."""
 
-    # print(f"[INFO] Context window exceeded at {time_exceeded}. Archiving old messages.")
+    print(f"[INFO] Context window exceeded at {time_exceeded}. Archiving old messages.")
     history = load_history()
     if not history:
         print("[INFO] No history to manage.")
@@ -131,8 +131,11 @@ def get_RAG_context(user_input):
     if not top_memories:
         return ""
     
-    memory_snippets = ",".join([f"[({m['text']} timestamp:{m['timestamp']})" for m in top_memories])
-    return f"Relevant memories:[{memory_snippets}]"
+    memory_snippets = "\n".join([f"- {m['text']} (timestamp:{m['timestamp']})" for m in top_memories])
+    return f"""
+### Relevant Memories
+{memory_snippets}    
+"""
 
 
 # === Core LLM call ===
@@ -147,6 +150,7 @@ def call_llm_api(messages):
             "type": "text"
             }
         },
+        store=False,
     )
     return response
 
@@ -156,13 +160,13 @@ def Riko_Response(user_input, time_now = datetime.now().isoformat(timespec='minu
     """
 
     handle_rolling_window(time_now)
-    messages = SYSTEM_PROMPT[:]  # Start with system prompt
+    messages = SYSTEM_PROMPT[:] 
 
     memory_text = get_RAG_context(user_input)
     
     if memory_text:
         messages.append({
-            "role": "system",
+            "role": "assistant",
             "content": [{"type": "input_text", "text": memory_text}]
         })    
     
@@ -183,16 +187,16 @@ def Riko_Response(user_input, time_now = datetime.now().isoformat(timespec='minu
     
     #This is basically us replacing the AI's parroted timestamp with an accurate timestamp
     response = response.output_text.rsplit("timestamp:")[0].strip()
+    if not response.startswith("Riko:"):
+        response = "Riko: " + response
     # Save assistant's response
     messages.append({
     "role": "assistant",
     "content": [
-        {"type": "output_text", "text": response + " timestamp:" + time_now}
+        {"type": "input_text", "text": response + " timestamp:" + time_now}
     ]    
     })
 
-    # Remove the system prompt from the messages (splice the list directly)
-    messages = messages[2:]  # Skip the first element as it's the system setup message
-    # Change from 1 to 2 to also skip RAG system messages from being appended to history
-    save_history(messages) # The part where we actually save the history from llm response
+    messages = messages[2:]  # Skip the first 2 elements as it's the system setup message and RAG memories
+    save_history(messages) 
     return response

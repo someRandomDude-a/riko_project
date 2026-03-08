@@ -69,16 +69,11 @@ def silero_vad_detection(audio_chunk, vad_model, sampling_rate=16000, threshold=
         print(f"VAD error: {e}, using energy detection")
         return None
     
-def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
-    # Remove existing file
-    if os.path.exists(output_file):
-        os.remove(output_file)
-    
-    print("⏳ Listening for speech...")
-    
+def monitor_and_transcribe(model, samplerate=16000):
     # Load VAD model (cached globally for performance)
     global vad_model
-    
+
+    print("⏳ Listening for speech...")
     # Audio recording parameters
     chunk_duration = 0.5  # Process audio in 0.5 second chunks
     chunk_size = int(samplerate * chunk_duration)
@@ -154,11 +149,6 @@ def record_and_transcribe(model, output_file="recording.wav", samplerate=16000):
     
     # Combine all audio chunks
     recording = np.concatenate(audio_data, axis=0)
-
-    # Write the file
-    #print("💾 Saving audio...")
-    # sf.write(output_file, recording, samplerate)
-    
     print("🎯 Transcribing...")
     
     # Transcribe using faster-whisper
@@ -176,6 +166,6 @@ if __name__ == "__main__":
     result = ""
     print("Say 'Stop.' to exit.")
     while result != "Stop.":
-        result = record_and_transcribe(model)
+        result = monitor_and_transcribe(model)
         print(f"Got: '{result}'")
     print("Heard Stop, Exiting...")
