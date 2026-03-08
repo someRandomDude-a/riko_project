@@ -2,7 +2,7 @@ import yaml
 import json
 import os
 from openai import OpenAI
-from process.llm_funcs.Memory_system.long_term_memory import load_faiss_index, load_memory_store, add_embeddings_to_faiss, save_faiss_index, save_memory_store, get_relevant_memories, get_embedding 
+from process.llm_funcs.Memory_system.long_term_memory import get_RAG_context, add_message_to_memory 
 import numpy as np
 from datetime import datetime
 
@@ -16,29 +16,8 @@ client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url']
 # Constants
 HISTORY_FILE = char_config['history_file']
 MODEL = char_config['model']
-SYSTEM_PROMPT =  [
-        {
-            "role": "system",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": char_config['presets']['default']['system_prompt'] 
-                },
-            ]
-        }
-    ]
-
+SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
 MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
-
-# === Initialize RAG Memory System ===
-embedding_dim = char_config['RAG_params']['text_embedding_dim']
-memory_store = load_memory_store()
-faiss_index = load_faiss_index(embedding_dim)
-
-if faiss_index.ntotal == 0:
-    add_embeddings_to_faiss(faiss_index, memory_store)
-    save_faiss_index(faiss_index)
-
 
 # === Utility: Load and Save Chat History ===
 def load_history():
@@ -46,7 +25,7 @@ def load_history():
         try:
             with open(HISTORY_FILE, "r") as f:
                 hist = json.load(f)
-                if hist:
+                if isinstance(hist, list):
                     return hist
         except json.JSONDecodeError:
             print("[WARN] History file is corrupted. Starting fresh history.")
@@ -58,38 +37,9 @@ def save_history(history):
         json.dump(history, f, indent=2)
 
 
-# === Send old messages to long-term memory ===
-def add_message_to_memory(message_text, message_time=datetime.now().isoformat(timespec='minutes')):
-    """Adds a message to long-term memory with default importance."""
-    global memory_store, faiss_index
-    
-    # === Skip duplicates ===
-    if any(m['text'] == message_text for m in memory_store):
-        print("[Memory] Duplicate message detected — skipping.")
-        return
-    
-    # format new memory entry
-    new_memory = {
-        "text": message_text,
-        "importance_score": char_config['RAG_params']['default_importance_score'] ,
-        "timestamp": message_time,
-        "access_count": 0,
-        "detailed": True,
-    }
-    memory_store.append(new_memory)
-    
-    embedding = np.array(get_embedding(message_text), dtype=np.float32).reshape(1, -1)
-        
-    faiss_index.add(embedding)
-    save_memory_store(memory_store)
-    save_faiss_index(faiss_index)
-
-
 # === Handle context overflow ===
-def handle_rolling_window(time_exceeded):
+def handle_rolling_window():
     """When context window is full, archive old messages into long-term memory."""
-
-    print(f"[INFO] Context window exceeded at {time_exceeded}. Archiving old messages.")
     history = load_history()
     if not history:
         print("[INFO] No history to manage.")
@@ -119,27 +69,8 @@ def handle_rolling_window(time_exceeded):
     save_history(history)
 
 
-# === Retrieve relevant memories for new prompt ===
-def get_RAG_context(user_input):
-    """
-      Query long-term memory for related past experiences.
-    """
-    # print("fetching relevant long term memories....")
-    ranked_memories, _, _ = get_relevant_memories(user_input, memory_store, faiss_index)
-    top_k = char_config['RAG_params']['default_top_k']    
-    top_memories = ranked_memories[:top_k]  # Top-K relevant memories
-    if not top_memories:
-        return ""
-    
-    memory_snippets = "\n".join([f"- {m['text']} (timestamp:{m['timestamp']})" for m in top_memories])
-    return f"""
-### Relevant Memories
-{memory_snippets}    
-"""
-
-
-# === Core LLM call ===
 def call_llm_api(messages):
+    """Core LLM Call"""
     response = client.responses.create(
         model=MODEL,
         input=messages,
@@ -154,22 +85,30 @@ def call_llm_api(messages):
     )
     return response
 
+
 def Riko_Response(user_input, time_now = datetime.now().isoformat(timespec='minutes')):
     """
     Handles user input, manages context, queries memory, and returns model output.
     """
 
-    handle_rolling_window(time_now)
-    messages = SYSTEM_PROMPT[:] 
-
+    handle_rolling_window()
     memory_text = get_RAG_context(user_input)
     
-    if memory_text:
-        messages.append({
-            "role": "assistant",
-            "content": [{"type": "input_text", "text": memory_text}]
-        })    
-    
+    header = """
+### Conversation History
+"""
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": SYSTEM_INSTRUCTIONS + memory_text + header
+                }
+            ]
+        }
+    ]
+
     history = load_history()
     if history:
         messages.extend(history)
@@ -182,10 +121,9 @@ def Riko_Response(user_input, time_now = datetime.now().isoformat(timespec='minu
         ]
     })
     
-    # print("\n\nFinal prompt: ", messages, "\n\n") # This print command can cause a lot of lag, only use for debugging
     response = call_llm_api(messages)
     
-    #This is basically us replacing the AI's parroted timestamp with an accurate timestamp
+    # replace the AI's parroted timestamp with an accurate timestamp
     response = response.output_text.rsplit("timestamp:")[0].strip()
     if not response.startswith("Riko:"):
         response = "Riko: " + response
@@ -196,7 +134,6 @@ def Riko_Response(user_input, time_now = datetime.now().isoformat(timespec='minu
         {"type": "input_text", "text": response + " timestamp:" + time_now}
     ]    
     })
-
-    messages = messages[2:]  # Skip the first 2 elements as it's the system setup message and RAG memories
+    messages = messages[1:]  # Skip the first element as it's the system setup message and RAG memories
     save_history(messages) 
     return response
