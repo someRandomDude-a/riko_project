@@ -61,7 +61,7 @@ def handle_rolling_window():
     if token_count <= MAX_HISTORY_TOKENS:
         return
     
-    while token_count >= MAX_HISTORY_TOKENS:
+    while token_count >= MAX_HISTORY_TOKENS or history[-1]["role"] == "assistant":
         # Pop oldest non-system message
         dropped_message = history.pop(0)
         token_count -= dropped_message["tokens"]
@@ -80,6 +80,27 @@ def handle_rolling_window():
             message_time = datetime.now().isoformat(timespec="minutes")
 
         add_message_to_memory(message_text,message_time)
+    if history:
+        if history[-1]["role"] == "assistant":
+            dropped_message = history.pop(0)
+            token_count -= dropped_message["tokens"]
+
+            if dropped_message["role"] == "system":
+                return
+
+            message = dropped_message["content"][0]["text"]
+            message_text = message.split(" timestamp:", 1)[0]
+            message_time = message.rsplit(" timestamp:", 1)[-1].strip()
+
+            # ensure every message has a valid timestamp
+            try:
+                datetime.fromisoformat(message_time)
+            except ValueError:
+                message_time = datetime.now().isoformat(timespec="minutes")
+
+            add_message_to_memory(message_text,message_time)
+
+        
     print("[INFO] Context window managed. Updated history saved. final history token count: ",token_count)
     save_history()
 
