@@ -3,21 +3,21 @@ import json
 import os
 from openai import OpenAI
 from process.llm_funcs.Memory_system.long_term_memory import get_RAG_context, add_message_to_memory 
-import numpy as np
 from datetime import datetime
-
-
+from transformers import AutoTokenizer
 
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
-
-client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])
 
 # Constants
 HISTORY_FILE = char_config['history_file']
 MODEL = char_config['model']
 SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
 MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
+MAX_OUTPUT_TOKENS = char_config['presets']['default']['model_params']['max_output_tokens']
+TEMPERATURE = char_config['presets']['default']['model_params']['temperature']
+
+client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])
 
 # === Utility: Load and Save Chat History ===
 def load_history():
@@ -69,12 +69,14 @@ def handle_rolling_window():
     save_history(history)
 
 
+
 def call_llm_api(messages):
     """Core LLM Call"""
     response = client.responses.create(
         model=MODEL,
         input=messages,
-        max_output_tokens= char_config['presets']['default']['model_params']['max_output_tokens'],
+        max_output_tokens= MAX_OUTPUT_TOKENS,
+        temperature=TEMPERATURE,
         stream=False,
         text={
             "format": {
