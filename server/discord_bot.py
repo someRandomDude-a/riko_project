@@ -3,7 +3,7 @@ from discord.ext import commands
 import discord
 import os
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime
 import threading
 from queue import Queue
 import asyncio
@@ -25,7 +25,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ---------------------------------------------
-llm_response_queue = Queue() #The message queue
+llm_response_queue = Queue(3) #The message queue
 discord_loop = None
 
 def worker():
@@ -34,9 +34,7 @@ def worker():
         To use, put messages in llm_response_queue.
     """
     while True:
-        message = llm_response_queue.get()
-        message.content = message.content.lstrip('&').strip()
-        
+        message = llm_response_queue.get()        
 
         user_text = f"{message.author.display_name}: {message.content}"
 
@@ -132,9 +130,9 @@ async def on_message(message):
         # Ignore messages from the bot itself
     if message.author == bot.user:
         return
-    
-    print(message.channel.id , message.author.name + "\t" + message.content +  "\t")
-    # Only respond in the target channel
+    print(f"{message.channel.id}\t{message.author.name}\t{message.content}") 
+
+   # Only respond in the target channel
     if message.channel.id  in channel_whitelist:
         
         if message.content[0] == '!':
@@ -142,6 +140,9 @@ async def on_message(message):
             return
         
         else:
+            if llm_response_queue.full():
+                message.add_reaction("❌")
+                message.reply("My input buffer is full, please wait until I finish with my queued responses!")
             llm_response_queue.put(message)
             await message.add_reaction("⏳")
             return

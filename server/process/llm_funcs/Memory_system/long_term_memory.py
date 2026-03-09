@@ -251,7 +251,7 @@ def get_relevant_memories(prompt, memory_store, index, k=5):
 def add_message_to_memory(message_text : str, message_time : str):
     """Adds a message to long-term memory with default importance."""
     # === Skip tiny messages ===
-    if len(message_text) < 5:
+    if len(message_text) < 25:
         return
 
     # === Skip duplicates ===
