@@ -3,13 +3,8 @@ from process.asr_func.auto_transcriber import monitor_and_transcribe
 from process.llm_funcs.llm_scr import Riko_Response
 from process.tts_func.sovits_streaming import sovits_stream
 
-from pathlib import Path
-
-
 ### transcribe audio 
-import uuid
 import soundfile as sf
-import sounddevice as sd
 
 def get_wav_duration(path):
     with sf.SoundFile(path) as f:
