@@ -4,7 +4,7 @@ import sounddevice as sd
 import threading
 import time
 import yaml
-
+import pathlib
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
 
@@ -82,16 +82,22 @@ def play_stream(end_of_stream,sample_rate=32000, channels=1, dtype=np.int16):
             time.sleep(0.1)
 
 
+
+text_lang = char_config['sovits_ping_config']['text_lang']
+ref_audio_path = pathlib.Path.resolve(char_config['sovits_ping_config']['ref_audio_path'])
+prompt_text = char_config['sovits_ping_config']['prompt_text']
+prompt_lang = char_config['sovits_ping_config']['prompt_lang']
+
 def sovits_stream(text: str, sample_rate: int = 32000, channels: int = 1, dtype: np.dtype = np.int16):
 
     url = "http://127.0.0.1:9880/tts"
 
     payload = {
         "text": text,
-        "text_lang": char_config['sovits_ping_config']['text_lang'],
-        "ref_audio_path": char_config['sovits_ping_config']['ref_audio_path'],
-        "prompt_text": char_config['sovits_ping_config']['prompt_text'],
-        "prompt_lang": char_config['sovits_ping_config']['prompt_lang'],
+        "text_lang": text_lang,
+        "ref_audio_path": ref_audio_path,
+        "prompt_text": prompt_text,
+        "prompt_lang": prompt_lang,
         "media_type": "raw",
         "streaming_mode": True,
     }

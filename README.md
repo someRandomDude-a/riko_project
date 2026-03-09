@@ -27,8 +27,8 @@ presets:
       Use actions like *action*
       You have a cute and playful personality.
     model_params:
-      context_window_token_limit: 2048 # this defines the context window size for managing chat history
-      max_output_tokens: 4096
+      context_window_token_limit: 4096 # this defines the context window size for managing chat history
+      max_output_tokens: 2048
       frequency_penalty: 0.0
     memories:
       - text: "Riko: I Love Senpai very much"
@@ -59,7 +59,7 @@ presets:
 sovits_ping_config:
   text_lang: en
   prompt_lang : en
-  ref_audio_path : pathr\to\your\riko_project\character_files\main_sample.wav
+  ref_audio_path : character_files\main_sample.wav
   prompt_text : This is a sample voice for you to just get started with because it sounds kind of cute but just make sure this doesn't have long silences.
 
 RAG_params:
