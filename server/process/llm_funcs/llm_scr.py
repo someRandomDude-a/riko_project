@@ -142,8 +142,8 @@ def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec=
     
     # replace the AI's parroted timestamp with an accurate timestamp
     response = response.output_text.rsplit("timestamp:")[0].strip()
-    if not response.startswith("Riko:"):
-        response = "Riko: " + response
+    if not response.startswith("(Riko)"):
+        response = "(Riko) " + response
     # Save assistant's response
     messages.append({
         "role": "assistant",

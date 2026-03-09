@@ -16,7 +16,7 @@ whisper_model = WhisperModel("distil-small.en", device="cuda", compute_type="int
 
 while True:
     try:
-        user_spoken_text = "Senpai: " + monitor_and_transcribe(whisper_model)
+        user_spoken_text = "(Senpai) " + monitor_and_transcribe(whisper_model)
 
         ### pass to LLM and get a LLM output.
         tts_read_text = Riko_Response(user_spoken_text)
@@ -26,7 +26,7 @@ while True:
         # generate audio and save it to client/audio 
         # Remove timestamp from tts_read_text before passing it spoken text part that we care about ->  timestamp
         
-        tts_read_text = tts_read_text.rsplit("timestamp:", 1)[0].split("Riko: ", 1)[-1].strip()
+        tts_read_text = tts_read_text.rsplit("timestamp:", 1)[0].split("(Riko) ", 1)[-1].strip()
         try:
             sovits_stream(tts_read_text)
         except KeyboardInterrupt as e:

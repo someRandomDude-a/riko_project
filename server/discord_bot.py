@@ -36,7 +36,7 @@ def worker():
     while True:
         message = llm_response_queue.get()        
 
-        user_text = f"{message.author.display_name}: {message.content}"
+        user_text = f"({message.author.display_name}) {message.content}"
 
         # handle attachments
         for attachment in message.attachments:
@@ -140,9 +140,9 @@ async def on_message(message):
             return
         
         else:
-            if llm_response_queue.full():
-                message.add_reaction("❌")
-                message.reply("My input buffer is full, please wait until I finish with my queued responses!")
+            if llm_response_queue.qsize() >= llm_response_queue.maxsize:
+                await message.add_reaction("❌")
+                await message.reply("My input buffer is full, please wait until I finish with my queued responses!")
             llm_response_queue.put(message)
             await message.add_reaction("⏳")
             return

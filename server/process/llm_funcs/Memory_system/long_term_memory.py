@@ -85,6 +85,7 @@ def load_memory_store():
                 print(f"Loaded {len(memory_store)} memories from file.")
 
                 if len(memory_store) != load_faiss_index().ntotal:
+                    print("[ERROR]memory Store and vector store index mismatch!, Rebuilding FAISS index.\n[ERROR]This can take a long time, do not worry!")
                     index = create_faiss_cpu_index()
                     add_faiss_embeddings(index, memory_store)
                     save_faiss_index(index)
