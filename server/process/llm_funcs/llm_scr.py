@@ -127,8 +127,8 @@ def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec=
         }
     ]
 
-
-    messages.extend(history)
+    if history:
+        messages.extend(history)
     # Add new user message
     messages.append({
         "role": "user",
