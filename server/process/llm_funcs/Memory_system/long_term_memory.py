@@ -3,7 +3,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 import time
 import json
-import os
+import pathlib
 from transformers import pipeline
 import torch
 import yaml
@@ -76,7 +76,7 @@ def load_memory_store():
     """Load memorystore from file if it exists, else load defaults"""
     
     memory_store = []
-    if os.path.exists(MEMORY_STORE_PATH):
+    if pathlib.Path.exists(MEMORY_STORE_PATH):
         with open(MEMORY_STORE_PATH, 'r') as f:
             try:
                 memory_store = json.load(f)
@@ -145,7 +145,7 @@ def save_faiss_index(index):
 
 def load_faiss_index():
     """Load FAISS index from disk"""
-    if os.path.exists(FAISS_INDEX_PATH):
+    if pathlib.Path.exists(FAISS_INDEX_PATH):
         index = faiss.read_index(FAISS_INDEX_PATH)
         print("FAISS index loaded from file.")
     else:
