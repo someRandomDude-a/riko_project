@@ -16,6 +16,10 @@ All prompts and parameters are stored in `character_config.yaml`.
 ```yaml
 history_file: ./persistant_memories/chat_history.json
 model : "ana-v1-m7"
+
+# This needs to be the excact name, you can get it by pressing copy on hugging face or by creating a local tokenizer file and passing its path here.
+# It will not work unless the model REPO has a tokenizer.json and tokenizer.model
+tokenizer_model: "TheBloke/Ana-v1-m7-GPTQ" 
 base_url: http://localhost:1234/v1
 presets:
   default:

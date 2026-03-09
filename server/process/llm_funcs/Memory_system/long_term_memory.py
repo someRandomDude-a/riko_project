@@ -147,10 +147,8 @@ def load_faiss_index():
     """Load FAISS index from disk"""
     if pathlib.Path.exists(FAISS_INDEX_PATH):
         index = faiss.read_index(FAISS_INDEX_PATH)
-        print("FAISS index loaded from file.")
     else:
         index = create_faiss_cpu_index()
-        print("No FAISS index found, creating new index.")
     return index
 
 def get_embedding(text: str | list[str]):
