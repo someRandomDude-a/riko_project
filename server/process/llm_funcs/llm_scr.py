@@ -1,29 +1,22 @@
 import yaml
 import json
-import os
 from openai import OpenAI
 from process.llm_funcs.Memory_system.long_term_memory import get_RAG_context, add_message_to_memory 
 from datetime import datetime
 from transformers import AutoTokenizer
-
+import pathlib
+import os
+import tempfile
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
 
-# Constants
-HISTORY_FILE = char_config['history_file']
-MODEL = char_config['model']
-SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
-MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
-MAX_OUTPUT_TOKENS = char_config['presets']['default']['model_params']['max_output_tokens']
-TEMPERATURE = char_config['presets']['default']['model_params']['temperature']
-
-client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])
-tokenizer = AutoTokenizer.from_pretrained(char_config['tokenizer_model'])
 
 
 # === Utility: Load and Save Chat History ===
+HISTORY_FILE = char_config['history_file']
+HISTORY_FILE = pathlib.Path(HISTORY_FILE).resolve()
 def load_history():
-    if os.path.exists(HISTORY_FILE):
+    if HISTORY_FILE.is_file():
         try:
             with open(HISTORY_FILE, "r") as f:
                 hist = json.load(f)
@@ -36,16 +29,32 @@ def load_history():
 history = load_history()
 
 def save_history():
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(history, f, indent=2)
+    # Ensure parent directory exists
+    HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        dir=HISTORY_FILE.parent,
+        delete=False,
+        encoding="utf-8"
+    ) as tmp:
+        json.dump(history, tmp, indent=2)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        temp_path = pathlib.Path(tmp.name)
 
+    temp_path.replace(HISTORY_FILE)
+
+
+tokenizer = AutoTokenizer.from_pretrained(char_config['tokenizer_model'])
 def get_llm_token_length(text : str | list[str]) -> int | list[int]:
     """Returns the number of tokens in a given string, or an array of lengths for each string in a string array"""
     lengths = tokenizer(text, add_special_tokens = False, return_length=True)["length"]
     if isinstance(text, str):
         return lengths[0]
     return lengths
+
 # === Handle context overflow ===
+MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
 def handle_rolling_window():
     """When context window is full, archive old messages into long-term memory."""
     if not history:
@@ -105,7 +114,10 @@ def handle_rolling_window():
     save_history()
 
 
-
+client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])
+MODEL = char_config['model']
+MAX_OUTPUT_TOKENS = char_config['presets']['default']['model_params']['max_output_tokens']
+TEMPERATURE = char_config['presets']['default']['model_params']['temperature']
 def call_llm_api(messages):
     """Core LLM Call"""
     response = client.responses.create(
@@ -123,7 +135,7 @@ def call_llm_api(messages):
     )
     return response
 
-
+SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
 def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec='minutes')):
     """
     Handles user input, manages context, queries memory, and returns model output.

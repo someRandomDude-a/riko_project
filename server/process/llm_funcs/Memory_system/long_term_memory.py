@@ -8,54 +8,18 @@ from transformers import pipeline
 import torch
 import yaml
 from datetime import datetime
-import copy
-
+import tempfile
+import os
 # === Load Character Configuration ===
 with open('character_config.yaml', 'r') as f:
     char_config = yaml.safe_load(f)
 
-# Constants
-MODEL_NAME = char_config['RAG_params']['embedding_model_id'] # Sentence-BERT model name
 BART_MODEL_NAME = char_config['RAG_params']['summarization_model_id']   # BART model name for summarization
-FAISS_INDEX_PATH = './persistant_memories/faiss_index.index' # File path for FAISS index
-MEMORY_STORE_PATH = './persistant_memories/memory_store.json' # File path for memory store
-EMBEDDING_DIM = char_config['RAG_params']['text_embedding_dim'] # Embedding dimension from config  
-FAISS_DECAY_FACTOR_HIGH = -char_config['RAG_params']['high_importance_decay_factor'] # Decay factor for high-importance memories
-FAISS_DECAY_FACTOR_LOW = -char_config['RAG_params']['low_importance_decay_factor'] # Decay factor for low-importance memories 
 SUMMARY_MIN_LENGTH = char_config['RAG_params']['summary_min_length'] # Minimum length for summary
 SUMMARY_MAX_LENGTH = char_config['RAG_params']['summary_max_length'] # Maximum length for summary
 SUMMARY_NUM_BEAMS = char_config['RAG_params']['summary_beam_size'] # Beam search size for summarization
 SUMMARY_MAX_TOKENS = char_config['RAG_params']['summary_max_tokens'] # Maximum number of tokens for BART input
-MEMORY_CLEANUP_THRESHOLD_DAYS = char_config['RAG_params']['memory_cleanup_threshold'] # Days before memory is eligible for cleanup
-MEMORY_IMPORTANCE_THRESHOLD = char_config['RAG_params']['memory_importance_threshold'] # Threshold below which memories are discarded
-DEFAULT_MEMORY_IMPORTANCE = char_config['RAG_params']['default_importance_score']
-
-# Load SentenceTransformer model
-model = SentenceTransformer(MODEL_NAME)
-
 summarizerPipeline = None
-
-def get_RAG_context(user_input):
-    """
-      Query long-term memory for related past experiences.
-    """
-    # print("fetching relevant long term memories....")
-    ranked_memories, _, _ = get_relevant_memories(user_input, memory_store, faiss_index)
-    top_k = char_config['RAG_params']['default_top_k']    
-    top_memories = ranked_memories[:top_k]  # Top-K relevant memories
-    if not top_memories:
-        return ""
-    
-    memory_snippets = "\n".join([f"- {m['text']} (timestamp:{m['timestamp']})" for m in top_memories])
-    return f"""
-### Relevant Memories
-These are past interactions that may be relevant.
-Use them only if useful.
-
-{memory_snippets}    
-"""
-
-
 def summarize_text(text):
     """summarize memory using BART"""
     print("Summarizer called!")
@@ -71,12 +35,17 @@ def summarize_text(text):
     
     return summary_text
 
+# ================ Memory Store Functions ===================
 
+MEMORY_STORE_PATH = './persistant_memories/memory_store.json'  # File path for memory store
+MEMORY_STORE_PATH = pathlib.Path(MEMORY_STORE_PATH).resolve()
 def load_memory_store():
     """Load memorystore from file if it exists, else load defaults"""
-    
+    global memory_store 
+    global faiss_index
+
     memory_store = []
-    if pathlib.Path.exists(MEMORY_STORE_PATH):
+    if MEMORY_STORE_PATH.is_file():
         with open(MEMORY_STORE_PATH, 'r') as f:
             try:
                 memory_store = json.load(f)
@@ -84,11 +53,11 @@ def load_memory_store():
                     raise ValueError("Memory_store is not a list")
                 print(f"Loaded {len(memory_store)} memories from file.")
 
-                if len(memory_store) != load_faiss_index().ntotal:
+                if len(memory_store) != faiss_index.ntotal:
                     print("[ERROR]memory Store and vector store index mismatch!, Rebuilding FAISS index.\n[ERROR]This can take a long time, do not worry!")
-                    index = create_faiss_cpu_index()
-                    add_faiss_embeddings(index, memory_store)
-                    save_faiss_index(index)
+                    faiss_index = create_faiss_cpu_index()
+                    add_faiss_embeddings()
+                    save_faiss_index()
 
             except (json.JSONDecodeError, ValueError) as e:
                 print("[WARN] Memory store file is empty or corrupted", e)
@@ -115,21 +84,31 @@ def load_memory_store():
         })
 
     print("No memories found, Loaded memory store from YAML.")
-    index = create_faiss_cpu_index()
-    add_faiss_embeddings(index, memory_store)
-    save_faiss_index(index)
-    save_memory_store(memory_store)
+    faiss_index = create_faiss_cpu_index()
+    add_faiss_embeddings()
+    save_faiss_index()
+    save_memory_store()
     return memory_store
 
-
-
-def save_memory_store(memory_store):
+def save_memory_store():
     """Save memory store to disk"""
+    MEMORY_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        'w',
+        dir=MEMORY_STORE_PATH.parent,
+        delete=False,
+        encoding='utf-8'
+    ) as tmp:
+        json.dump(memory_store, tmp, indent=2)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        temp_path = pathlib.Path(tmp.name)
 
-    with open(MEMORY_STORE_PATH, 'w') as f:
-        json.dump(memory_store, f)
+    temp_path.replace(MEMORY_STORE_PATH)
     print(f"Saved {len(memory_store)} memories to file.")
+# ===================FAISS functions===============
 
+EMBEDDING_DIM = char_config['RAG_params']['text_embedding_dim'] # Embedding dimension from config  
 def create_faiss_cpu_index():
     """Create FAISS-CPU index"""
     M = 64  # Number of bi-directional links per node (tradeoff: accuracy vs. memory)
@@ -139,79 +118,112 @@ def create_faiss_cpu_index():
     print(f"Created HNSWFlat FAISS index (dim={EMBEDDING_DIM}, M={M})")
     return index
 
-def save_faiss_index(index):
+FAISS_INDEX_PATH = './persistant_memories/faiss_index.index' # File path for FAISS index
+FAISS_INDEX_PATH = pathlib.Path(FAISS_INDEX_PATH).resolve()
+def save_faiss_index():
     """Save FAISS index to disk"""
-    faiss.write_index(index, FAISS_INDEX_PATH)
+    faiss.write_index(faiss_index, FAISS_INDEX_PATH.as_posix())
     print("FAISS index saved to file.")
 
 def load_faiss_index():
     """Load FAISS index from disk"""
-    if pathlib.Path.exists(FAISS_INDEX_PATH):
-        index = faiss.read_index(FAISS_INDEX_PATH)
+    if FAISS_INDEX_PATH.is_file():
+        index = faiss.read_index(FAISS_INDEX_PATH.as_posix())
     else:
         index = create_faiss_cpu_index()
     return index
 
+
+MODEL_NAME = char_config['RAG_params']['embedding_model_id'] # Sentence-BERT model name
+embedding_model = SentenceTransformer(MODEL_NAME)
 def get_embedding(text: str | list[str]):
     """get the embedding of a text"""
-    embedding = model.encode(text, convert_to_numpy=True).astype("float32")
+    embedding = embedding_model.encode(text, convert_to_numpy=True).astype("float32")
     if embedding.ndim == 1:
         embedding = embedding.reshape(1, -1)
-
     return embedding
 
-def add_faiss_embeddings(index, memory_store):
+def add_faiss_embeddings():
     """add embeddings to FAISS index"""
     if not memory_store:
         return
     texts = [memory['text'] for memory in memory_store]
 
     embeddings = get_embedding(texts)
-    index.add(embeddings)
+    faiss_index.add(embeddings)
 
 def query_faiss_cpu(index, query_embedding, k=5):
     """query FAISS-CPU for relevant memories"""
     distances, indices = index.search(query_embedding, k)  # Get top-k indices and distances
     return indices, distances
 
-age_div_factor = 60 * 60 * 24
-def get_age_in_days(memory):
-    return  (time.time() - datetime.fromisoformat(memory['timestamp']).timestamp()) / age_div_factor
+# ============= RAG memory functions ===================
 
-def decay_memory(memory):
+def get_RAG_context(user_input):
+    """
+      Query long-term memory for related past experiences.
+    """
+    # print("fetching relevant long term memories....")
+    ranked_memories = get_relevant_memories(user_input, memory_store, faiss_index)
+    if not ranked_memories:
+        return ""
+    
+    memory_snippets = "\n".join([f"- {m['text']} (timestamp:{m['timestamp']})" for m in ranked_memories])
+    return f"""
+### Relevant Memories
+These are past interactions that may be relevant.
+Use them only if useful.
+{memory_snippets}    
+"""
+
+def get_age_in_days(memory):
+    return  (time.time() - datetime.fromisoformat(memory['timestamp']).timestamp()) / AGE_DIV_FACTOR
+
+MEMORY_DECAY_FACTOR_HIGH = -char_config['RAG_params']['high_importance_decay_factor'] # Decay factor for high-importance memories
+MEMORY_DECAY_FACTOR_LOW = -char_config['RAG_params']['low_importance_decay_factor'] # Decay factor for low-importance memories 
+def decay_memory_store():
     """apply timestamp decay and rank memories"""
     # Decay based on importance: high importance memories decay slower
-    decay = np.exp(
-        (FAISS_DECAY_FACTOR_HIGH if memory['importance_score'] > 0.8 else FAISS_DECAY_FACTOR_LOW) * get_age_in_days(memory))
-    memory['importance_score'] *= decay
+    for memory in memory_store:
+        decay = np.exp(
+            (MEMORY_DECAY_FACTOR_HIGH if memory['importance_score'] > 0.8 else MEMORY_DECAY_FACTOR_LOW) * get_age_in_days(memory)
+        )
 
-    # Transition from detailed to summarized when importance is low
-    if memory['importance_score'] < 0.3 and memory['detailed'] and len(memory['text']) > 300:  # Low importance, summarized
-        print("summarizing memory: " + memory['text'])
-        memory['text'] = summarize_text(memory['text'])
-        memory['detailed'] = False
-        
-    return memory
+        memory['importance_score'] *= decay
+        # Transition from detailed to summarized when importance is low
+        if memory['importance_score'] < 0.3 and memory['detailed'] and len(memory['text']) > 300:  # Low importance, summarized
+            print("summarizing memory: " + memory['text'])
+            memory['text'] = summarize_text(memory['text'])
+            memory['detailed'] = False
+    save_memory_store()
 
-def cleanup_memory_store(memory_store):
+
+
+MEMORY_CLEANUP_THRESHOLD_DAYS = char_config['RAG_params']['memory_cleanup_threshold'] # Days before memory is eligible for cleanup
+MEMORY_IMPORTANCE_THRESHOLD = char_config['RAG_params']['memory_importance_threshold'] # Threshold below which memories are discarded
+def cleanup_memory_store():
     """
     Function to clean up low-importance memories (optional cleanup process)
     MEMORY_CLEANUP_THRESHOLD_DAYS  # Clean memories older than 30 days
     MEMORY_IMPORTANCE_THRESHOLD  # Discard memories with importance lower than 0.1
     """
     # Filter out low-importance or very old memories
+    global memory_store
     trimmed_memory_store = [
         memory for memory in memory_store
         if get_age_in_days(memory) < MEMORY_CLEANUP_THRESHOLD_DAYS or memory['importance_score'] >= MEMORY_IMPORTANCE_THRESHOLD
     ]
     if trimmed_memory_store == memory_store:
-        return memory_store, load_faiss_index()
+        return
     
-    index = create_faiss_cpu_index()
-    add_faiss_embeddings(index, trimmed_memory_store)
-    
+    global faiss_index
+    faiss_index = create_faiss_cpu_index()
+    memory_store = trimmed_memory_store
+    add_faiss_embeddings()
     print(f"Cleaned up memory store, {len(trimmed_memory_store)} memories remaining.")
-    return trimmed_memory_store, index
+    save_faiss_index()
+    save_memory_store()
+    
 
 
 def update_memory_importance(memory):
@@ -221,7 +233,8 @@ def update_memory_importance(memory):
     memory['importance_score'] = min(memory['importance_score'], 1.0)  # Cap at 1.0
     return memory
 
-def get_relevant_memories(prompt, memory_store, index, k=5):
+TOP_K = char_config['RAG_params']['default_top_k']    
+def get_relevant_memories(prompt, memory_store, index, k=TOP_K):
     """retrieve relevant memories based on a prompt, returns K memories"""
 
     indices, distances = query_faiss_cpu(index, get_embedding(prompt), k)
@@ -229,24 +242,29 @@ def get_relevant_memories(prompt, memory_store, index, k=5):
     # Rank memories by importance, decay, and similarity
     ranked_memories = []
     for idx, distance in zip(indices[0], distances[0]):
-        memory = copy.copy(memory_store[idx])
-        decay = np.exp(FAISS_DECAY_FACTOR_HIGH if memory['importance_score'] > 0.8 else FAISS_DECAY_FACTOR_LOW  * get_age_in_days(memory))
-        memory['ranked_score'] = memory['importance_score'] * decay
-        memory['similarity_score'] = 1 / (1 + distance)  # Inverse distance for higher similarity
-        ranked_memories.append(memory)
+        if idx < 0:
+            continue
+        # build ranked memory array
+        memory = memory_store[idx]
+        decay = np.exp((MEMORY_DECAY_FACTOR_HIGH if memory['importance_score'] > 0.8 else MEMORY_DECAY_FACTOR_LOW)  * get_age_in_days(memory))
+        ranked_score = memory['importance_score'] * decay * 0.6 + (1 / (1 + distance)) * 0.4
+        ranked_memories.append({
+            "text": memory["text"],
+            "timestamp": memory["timestamp"],
+            "ranked_score": ranked_score,
+        })
 
-    ranked_memories = sorted(ranked_memories, key=lambda x: x['ranked_score'], reverse=True)
-
-    # Update access count and importance
-    for idx in indices[0]:
+        # Update access count and importance
         memory_store[idx]['access_count'] += 1
         update_memory_importance(memory_store[idx])
 
-    # Update memory store with decayed importance    
-    memory_store =  [decay_memory(memory) for memory in memory_store]
-    return ranked_memories, indices, distances
+    ranked_memories.sort(key=lambda x: x['ranked_score'], reverse=True)
+
+    decay_memory_store()
+    return ranked_memories
 
 
+DEFAULT_MEMORY_IMPORTANCE = char_config['RAG_params']['default_importance_score']
 def add_message_to_memory(message_text : str, message_time : str):
     """Adds a message to long-term memory with default importance."""
     # === Skip tiny messages ===
@@ -271,34 +289,27 @@ def add_message_to_memory(message_text : str, message_time : str):
     embedding = get_embedding(message_text)
         
     faiss_index.add(embedding)
-    save_memory_store(memory_store)
-    save_faiss_index(faiss_index)
+    save_memory_store()
+    save_faiss_index()
 
 # === Initialize RAG Memory System ===
-memory_store = load_memory_store()
 faiss_index = load_faiss_index()
+memory_store = load_memory_store()
 
 if faiss_index.ntotal == 0:
-    add_faiss_embeddings(faiss_index, memory_store)
-    save_faiss_index(faiss_index)
+    add_faiss_embeddings()
+    save_faiss_index()
 
 
 # Main script execution
 if __name__ == "__main__":
     prompt = "Tell me more about yourself?"
-    ranked_memories, indices, distances = get_relevant_memories(prompt, memory_store, faiss_index)
+    ranked_memories = get_relevant_memories(prompt, memory_store, faiss_index)
 
     print("Ranked Memories:")
     for memory in ranked_memories:
         print(f"Memory Text: {memory['text']}")
-        print(f"Importance Score: {memory['importance_score']:.4f}, Similarity Score: {memory['similarity_score']:.4f}")
-        print(f"Decay Score: {memory['ranked_score']:.4f}, Access Count: {memory['access_count']}")
-        print("-" * 50)
-
     
-
-    # Cleanup mem store WIL break yur file, do not use
-    memory_store, faiss_index = cleanup_memory_store(memory_store)
-    add_message_to_memory("example sentence!!! awesome", datetime.now().isoformat(timespec="minutes"))
-    save_memory_store(memory_store)
-    save_faiss_index(faiss_index)
+    #cleanup_memory_store()
+    save_memory_store()
+    save_faiss_index()
