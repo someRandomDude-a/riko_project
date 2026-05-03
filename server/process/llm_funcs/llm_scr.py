@@ -15,6 +15,8 @@ with open('character_config.yaml', 'r') as f:
 # === Utility: Load and Save Chat History ===
 HISTORY_FILE = char_config['history_file']
 HISTORY_FILE = pathlib.Path(HISTORY_FILE).resolve()
+HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+
 def load_history():
     if HISTORY_FILE.is_file():
         try:
@@ -29,8 +31,6 @@ def load_history():
 history = load_history()
 
 def save_history():
-    # Ensure parent directory exists
-    HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         "w",
         dir=HISTORY_FILE.parent,
