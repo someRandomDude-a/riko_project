@@ -88,7 +88,7 @@ def handle_rolling_window():
         except ValueError:
             message_time = datetime.now().isoformat(timespec="minutes")
 
-        add_message_to_memory(message_text,message_time)
+        add_message_to_memory(message_text, message_time, history)
     if history:
         if history[-1]["role"] == "assistant":
             dropped_message = history.pop(0)
