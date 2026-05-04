@@ -19,9 +19,9 @@ while True:
         user_spoken_text = "(Senpai) " + monitor_and_transcribe(whisper_model)
 
         ### pass to LLM and get a LLM output.
-        tts_read_text = Riko_Response(user_spoken_text)
+        tts_read_text, reasoning = Riko_Response(user_spoken_text)
     
-        print(tts_read_text)
+        print(tts_read_text + "\n\nReasoning:\n" + reasoning)
 
         # generate audio and save it to client/audio 
         # Remove timestamp from tts_read_text before passing it spoken text part that we care about ->  timestamp

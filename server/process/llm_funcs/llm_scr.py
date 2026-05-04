@@ -57,6 +57,7 @@ def get_llm_token_length(text : str | list[str]) -> int | list[int]:
 MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
 def handle_rolling_window():
     """When context window is full, archive old messages into long-term memory."""
+
     if not history:
         print("[INFO] No history to manage.")
         return
@@ -70,7 +71,7 @@ def handle_rolling_window():
     if token_count <= MAX_HISTORY_TOKENS:
         return
     
-    while token_count >= MAX_HISTORY_TOKENS or history[-1]["role"] == "assistant":
+    while token_count >= MAX_HISTORY_TOKENS or history[0]["role"] != "user":
         # Pop oldest non-system message
         dropped_message = history.pop(0)
         token_count -= dropped_message["tokens"]
@@ -89,27 +90,7 @@ def handle_rolling_window():
             message_time = datetime.now().isoformat(timespec="minutes")
 
         add_message_to_memory(message_text, message_time, history)
-    if history:
-        if history[-1]["role"] == "assistant":
-            dropped_message = history.pop(0)
-            token_count -= dropped_message["tokens"]
 
-            if dropped_message["role"] == "system":
-                return
-
-            message = dropped_message["content"][0]["text"]
-            message_text = message.split(" timestamp:", 1)[0]
-            message_time = message.rsplit(" timestamp:", 1)[-1].strip()
-
-            # ensure every message has a valid timestamp
-            try:
-                datetime.fromisoformat(message_time)
-            except ValueError:
-                message_time = datetime.now().isoformat(timespec="minutes")
-
-            add_message_to_memory(message_text,message_time)
-
-        
     print("[INFO] Context window managed. Updated history saved. final history token count: ",token_count)
     save_history()
 
@@ -134,6 +115,7 @@ def call_llm_api(messages):
         store=False,
     )
     return response
+
 
 SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
 def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec='minutes')):
@@ -174,18 +156,31 @@ def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec=
     response = call_llm_api(messages)
     
     # replace the AI's parroted timestamp with an accurate timestamp
-    response = response.output_text.rsplit("timestamp:")[0].strip()
-    if not response.startswith("(Riko)"):
-        response = "(Riko) " + response
+    response_text = response.output_text.rsplit("timestamp:")[0].strip()
+    if not response_text:
+        response_text = "(Riko) ..." 
+    
+    if not response_text.startswith("(Riko)"):
+        response_text = "(Riko) " + response_text
+        
+
+    for item in response.output:
+        if getattr(item, "type", "") == "reasoning":
+            content_list = getattr(item, "content", [])
+            if content_list:
+                reasoning = content_list[0].text
+            break
+    
+
     # Save assistant's response
     messages.append({
         "role": "assistant",
         "content": [
-            {"type": "output_text", "text": response + " timestamp:" + time_now}
+            {"type": "output_text", "text": response_text + " timestamp:" + time_now}
         ],
-        "tokens": get_llm_token_length(response + " timestamp:" + time_now)
+        "tokens": get_llm_token_length(response_text + " timestamp:" + time_now)
     })
-    messages = messages[1:]  # Skip the first element as it's the system setup message and RAG memories
-    history = messages
+    
+    history = messages[1:]# Skip the first element as it's the system setup message and RAG memories
     save_history() 
-    return response
+    return response_text, reasoning
