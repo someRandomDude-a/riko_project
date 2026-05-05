@@ -67,10 +67,6 @@ def worker():
                 message.reply(f'||```{reasoning}```||\n\n{response}'),
                 discord_loop
             )
-            asyncio.run_coroutine_threadsafe(
-                message.add_reaction("✅"),
-                discord_loop
-            )
             llm_response_queue.task_done()        
 
 threading.Thread(target=worker, daemon=True).start()

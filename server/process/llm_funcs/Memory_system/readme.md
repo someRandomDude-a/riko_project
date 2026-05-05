@@ -1,3 +1,46 @@
+# TODO:
+
+implement memory types:
+
+- episodic (events)
+- semantic (facts)
+- preference (stable)
+- meta (about the AI itself)
+
+implement top-k + threshold for duplicate detection
+
+use a much strongegr model for reflection and sumarization (qwen 3.5 2b uncesnsored is in the works!)
+this will likely also be replaced in the future by using the main inference model when I finally implement dream states and auto fine tuning
+
+Layer 2 — Personality (QLoRA)
+
+Train:
+
+tone
+speaking style
+pacing
+emotional baseline
+
+This becomes the “voice” of the companion
+
+flow chart:
+
+```text
+Conversation
+   ↓
+Memory stored (RAG)
+   ↓
+Reflection (dreaming)
+   ↓
+- extract preferences
+- build identity
+- detect patterns
+   ↓
+Update memory (not weights)
+   ↓
+Occasional LoRA training (style only)
+```
+
 # Idea:
 
 the bot *itself* decides:
