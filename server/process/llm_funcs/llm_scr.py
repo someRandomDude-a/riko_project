@@ -13,14 +13,14 @@ with open('character_config.yaml', 'r') as f:
 
 
 # === Utility: Load and Save Chat History ===
-HISTORY_FILE = char_config['history_file']
-HISTORY_FILE = pathlib.Path(HISTORY_FILE).resolve()
-HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+_HISTORY_FILE = char_config['history_file']
+_HISTORY_FILE = pathlib.Path(_HISTORY_FILE).resolve()
+_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-def load_history():
-    if HISTORY_FILE.is_file():
+def _load_history():
+    if _HISTORY_FILE.is_file():
         try:
-            with open(HISTORY_FILE, "r") as f:
+            with open(_HISTORY_FILE, "r") as f:
                 hist = json.load(f)
                 if isinstance(hist, list):
                     return hist
@@ -28,21 +28,21 @@ def load_history():
             print("[WARN] History file is corrupted. Starting fresh history.")
     return None
 
-history = load_history()
+_history = _load_history()
 
-def save_history():
+def _save_history():
     with tempfile.NamedTemporaryFile(
         "w",
-        dir=HISTORY_FILE.parent,
+        dir=_HISTORY_FILE.parent,
         delete=False,
         encoding="utf-8"
     ) as tmp:
-        json.dump(history, tmp, indent=2)
+        json.dump(_history, tmp, indent=2)
         tmp.flush()
         os.fsync(tmp.fileno())
         temp_path = pathlib.Path(tmp.name)
 
-    temp_path.replace(HISTORY_FILE)
+    temp_path.replace(_HISTORY_FILE)
 
 
 tokenizer = AutoTokenizer.from_pretrained(char_config['tokenizer_model'])
@@ -54,26 +54,26 @@ def get_llm_token_length(text : str | list[str]) -> int | list[int]:
     return lengths
 
 # === Handle context overflow ===
-MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
+_MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
 def handle_rolling_window():
     """When context window is full, archive old messages into long-term memory."""
 
-    if not history:
+    if not _history:
         print("[INFO] No history to manage.")
         return
     
     token_count = 0 
-    for msg in history:
+    for msg in _history:
         if "tokens" not in msg:
             msg["tokens"] = get_llm_token_length(msg["content"][0]["text"])
         token_count += msg["tokens"]
 
-    if token_count <= MAX_HISTORY_TOKENS:
+    if token_count <= _MAX_HISTORY_TOKENS:
         return
     
-    while token_count >= MAX_HISTORY_TOKENS or history[0]["role"] != "user":
+    while token_count >= _MAX_HISTORY_TOKENS or _history[0]["role"] != "user":
         # Pop oldest non-system message
-        dropped_message = history.pop(0)
+        dropped_message = _history.pop(0)
         token_count -= dropped_message["tokens"]
 
         if dropped_message["role"] == "system":
@@ -89,23 +89,23 @@ def handle_rolling_window():
         except ValueError:
             message_time = datetime.now().isoformat(timespec="minutes")
 
-        add_message_to_memory(message_text, message_time, history)
+        add_message_to_memory(message_text, message_time, _history)
 
     print("[INFO] Context window managed. Updated history saved. final history token count: ",token_count)
-    save_history()
+    _save_history()
 
 
-client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])
-MODEL = char_config['model']
-MAX_OUTPUT_TOKENS = char_config['presets']['default']['model_params']['max_output_tokens']
-TEMPERATURE = char_config['presets']['default']['model_params']['temperature']
-def call_llm_api(messages):
+_client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])
+_MODEL = char_config['model']
+_MAX_OUTPUT_TOKENS = char_config['presets']['default']['model_params']['max_output_tokens']
+_TEMPERATURE = char_config['presets']['default']['model_params']['temperature']
+def _call_llm_api(messages):
     """Core LLM Call"""
-    response = client.responses.create(
-        model=MODEL,
+    response = _client.responses.create(
+        model=_MODEL,
         input=messages,
-        max_output_tokens= MAX_OUTPUT_TOKENS,
-        temperature=TEMPERATURE,
+        max_output_tokens= _MAX_OUTPUT_TOKENS,
+        temperature=_TEMPERATURE,
         stream=False,
         text={
             "format": {
@@ -117,16 +117,17 @@ def call_llm_api(messages):
     return response
 
 
-SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
-def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec='minutes')):
+_SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
+def Riko_Response(user_input: str, time_now = None):
     """
     Handles user input, manages context, queries memory, and returns model output.
     """
-    global history
+    if time_now == None:
+        time_now = datetime.now().isoformat(timespec='minutes')
 
+    global _history
     handle_rolling_window()
     memory_text = get_RAG_context(user_input)
-    
     header = """
 ### Conversation History
 """
@@ -136,14 +137,14 @@ def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec=
             "content": [
                 {
                     "type": "input_text",
-                    "text": SYSTEM_INSTRUCTIONS + memory_text + header
+                    "text": _SYSTEM_INSTRUCTIONS + memory_text + header
                 }
             ]
         }
     ]
 
-    if history:
-        messages.extend(history)
+    if _history:
+        messages.extend(_history)
     # Add new user message
     messages.append({
         "role": "user",
@@ -153,7 +154,7 @@ def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec=
         "tokens": get_llm_token_length(user_input + " timestamp:" + time_now)
     })
     
-    response = call_llm_api(messages)
+    response = _call_llm_api(messages)
     
     # replace the AI's parroted timestamp with an accurate timestamp
     response_text = response.output_text.rsplit("timestamp:")[0].strip()
@@ -163,14 +164,15 @@ def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec=
     if not response_text.startswith("(Riko)"):
         response_text = "(Riko) " + response_text
         
-
-    for item in response.output:
-        if getattr(item, "type", "") == "reasoning":
-            content_list = getattr(item, "content", [])
-            if content_list:
-                reasoning = content_list[0].text
-            break
-    
+    try:
+        for item in response.output:
+            if getattr(item, "type", "") == "reasoning":
+                content_list = getattr(item, "content", [])
+                if content_list:
+                    reasoning = content_list[0].text
+                break
+    except Exception as e:
+        reasoning = f"Could not fetch reasoning, {e}"
 
     # Save assistant's response
     messages.append({
@@ -181,6 +183,6 @@ def Riko_Response(user_input: str, time_now = datetime.now().isoformat(timespec=
         "tokens": get_llm_token_length(response_text + " timestamp:" + time_now)
     })
     
-    history = messages[1:]# Skip the first element as it's the system setup message and RAG memories
-    save_history() 
+    _history = messages[1:]# Skip the first element as it's the system setup message and RAG memories
+    _save_history() 
     return response_text, reasoning

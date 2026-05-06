@@ -57,14 +57,14 @@ def worker():
         try:
             timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='minutes')
             
-            response, reasoning = Riko_Response(user_text, timestamp)
+            response, _ = Riko_Response(user_text, timestamp)
 
             
         except Exception as e:
             response = f"⚠️ Error: {e}"
         finally:
             asyncio.run_coroutine_threadsafe(
-                message.reply(f'||```{reasoning}```||\n\n{response}'),
+                message.reply(f'{response[6:].strip()}'),
                 discord_loop
             )
             llm_response_queue.task_done()        
