@@ -9,7 +9,6 @@ import asyncio
 
 from process.llm_scripts.MCP_Tools import pdf_processor
 from process.llm_scripts.module import Riko_Response
-from process.common.config import char_config
 
 # Config:
 time_offset = datetime.now().astimezone().utcoffset()
@@ -37,7 +36,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 llm_response_queue = Queue(3) #The message queue
 discord_loop = None
 
-_ASSISTANT_NAME_LEN = len(char_config['presets']['default']['name']) + 1
 def worker():
     """
         Worker thread to process LLM responses sequentialy.
@@ -68,7 +66,6 @@ def worker():
             timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='minutes')
             
             response, _ = Riko_Response(user_text, timestamp)
-            response = response.strip()[_ASSISTANT_NAME_LEN:].strip()
             
         except Exception as e:
             response = f"⚠️ Error: {e}"
