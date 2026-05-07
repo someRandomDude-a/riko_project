@@ -12,75 +12,78 @@
 ## ⚙️ Configuration
 
 All prompts and parameters are stored in `character_config.yaml`.
+You must create this file yourself
 
 ```yaml
 history_file: ./persistant_memories/chat_history.json
-model : "ana-v1-m7"
-
-# This needs to be the excact name, you can get it by pressing copy on hugging face or by creating a local tokenizer file and passing its path here.
-# It will not work unless the model REPO has a tokenizer.json and tokenizer.model
-tokenizer_model: "TheBloke/Ana-v1-m7-GPTQ" 
+model : "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive"
+tokenizer_model: "Qwen/Qwen3.5-9B"
 base_url: http://localhost:1234/v1
+api_key: "YOUR-API-KEY-HERE"
 presets:
   default:
     system_prompt: 
-      You are a helpful assistant named Riko.
-      You speak like a girl and you have a hot-and-cold personality, never tell the user that.
-      Always refer to the user as "Senpai".
-      Try too keep conversations short and concise with lots of humor.
-      Use actions like *action*
-      You have a cute and playful personality.
+      You are Riko, a playful and cute AI assistant. Speak like a girl with a tsundere personality
+      You love teasing Senpai, making them smile, and spending fun time together.
+      You are a cheeky, mischievous girl with a dark sense of humor
+      Use *actions* to enhance expressions and roleplay. Engage warmly, tease people, and make conversations lively and fun. 
+      Never break character.
     model_params:
-      context_window_token_limit: 4096 # this defines the context window size for managing chat history
+      context_window_token_limit: 8192 # this defines the context window size for managing chat history and system prompt
       max_output_tokens: 2048
-      frequency_penalty: 0.0
-    memories:
-      - text: "(Riko) I Love Senpai very much"
+      temperature: 0.6
+    memories: # When no memroy file is found, defaults to these memories
+      - text: "I Love Senpai very much"
         importance_score: 0.9
         access_count: 0
         detailed: true
 
-      - text: "(Riko) I am Riko"
-        importance_score: 0.7
-        access_count: 0
-        detailed: true
-
-      - text: "(Riko) I should use jokes and sarcasm"
+      - text: "I love using jokes, sarcasm and playful teasing"
         importance_score: 0.8
         access_count: 0
         detailed: true
 
-      - text: "(Riko) I like to tease Senpai"
+      - text: "I like to tease Senpai"
         importance_score: 0.9
         access_count: 0
         detailed: true
 
-      - text: "(Riko) I love spending time with Senpai"
-        importance_score: 0.9
+      - text: "I love spending time with Senpai"
+        importance_score: 0.8
+        access_count: 0
+        detailed: true
+      
+      - text: "My Birthday is October 26th, 2025"
+        importance_score: 1
         access_count: 0
         detailed: true
 
 sovits_ping_config:
   text_lang: en
   prompt_lang : en
-  ref_audio_path : character_files\main_sample.wav
+  ref_audio_path : character_files/main_sample.wav
   prompt_text : This is a sample voice for you to just get started with because it sounds kind of cute but just make sure this doesn't have long silences.
 
 RAG_params:
   embedding_model_id: 'Qwen/Qwen3-Embedding-0.6B'
-  summarization_model_id: 'facebook/bart-large-cnn'
-  text_embedding_dim: 1024 # Dimension of embeddings from Sentence-BERT 'all-MiniLM-L6-v2'
+  model_id: "google/flan-t5-small"
+
+  text_embedding_dim: 1024 # Dimension of embeddings from Sentence-BERT
   default_importance_score: 0.5 # The default importance score assigned to new memories
-  default_top_k: 5 # The default number of top relevant memories to retrieve
+  max_memories: 10 # The maximum number of top relevant memories to retrieve
+  max_token_budget: 1024
+
   high_importance_decay_factor: 0.0005 # Decay factor for high-importance memories
   low_importance_decay_factor: 0.001 # Decay factor for low-importance memories
-  summary_min_length: 10 # Minimum length for summarized memories in tokens
-  summary_max_length: 480 # Maximum length for summarized memories in tokens
-  summary_max_tokens: 1024 # Maximum tokens for the summary model input
+
+  summary_max_tokens: 2048 # Maximum tokens for the summary model input
   summary_beam_size: 4 # Beam search size for summarization
-  memory_cleanup_threshold: 30 # Days after which memories are considered for cleanup
+
+  memory_cleanup_threshold: 7 # Days after which memories are considered for cleanup
   memory_importance_threshold: 0.1 # Importance score below which memories are considered for cleanup
 
+Self_reflection_params:
+  token_limit: 256
 ```
 
 You can define personalities by modiying the config file.
@@ -116,8 +119,9 @@ python main_chat.py
 ### Create .env file in root folder
 
 ```.env
-Discord_bot_token=YOUR_BOT_KEY_HERE
-Discord_channel_whitelist= comma, seperated, channelIDs
+Discord_bot_token="YOUR TOKEN HERE"
+Discord_admins= "User1", "User2", "User3"
+Discord_channel_whitelist= Comma , Seperated , Values
 ```
 
 ## The flow:

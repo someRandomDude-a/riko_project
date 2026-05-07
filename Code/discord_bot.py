@@ -1,4 +1,3 @@
-from process.llm_funcs.llm_scr import Riko_Response
 from discord.ext import commands
 import discord
 import os
@@ -7,17 +6,27 @@ from datetime import datetime
 import threading
 from queue import Queue
 import asyncio
-from process.llm_funcs.pdf_processor import pdf_text_extract
+
+from process.llm_scripts.MCP_Tools import pdf_processor
+from process.llm_scripts.module import Riko_Response
+
 
 # Config:
 load_dotenv()
 time_offset = datetime.now().astimezone().utcoffset()
-TOKEN = os.getenv("Discord_bot_token").strip()
-channel_whitelist = [
+_TOKEN = os.getenv("Discord_bot_token").strip()
+_channel_whitelist = [
     int(ch.strip())
     for ch in os.getenv("Discord_Channel_whitelist", "").split(",")
     if ch.strip()
 ]
+
+_admins = [
+    str(ch.strip())
+    for ch in os.getenv("Discord_admins", "").split(",")
+    if ch.strip()
+]
+
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -46,7 +55,7 @@ def worker():
                         attachment.read(),
                         discord_loop
                     ).result()
-                    pdf_text = pdf_text_extract(pdf_byte)
+                    pdf_text = pdf_processor.pdf_text_extract(pdf_byte)
                     pdf_text = pdf_text[:100000] #limit max size
                     user_text += f"\n\n[PDF CONTENT START]\n{pdf_text}\n[PDF CONTENT END]\n"
                     
@@ -73,15 +82,18 @@ threading.Thread(target=worker, daemon=True).start()
 
 
 @bot.command()
-async def ping(ctx):
-    """Responds with 'Pong!' when someone types !ping."""
-    await ctx.send('Pong!')
+async def leave(ctx):
+    """Leave the server if you are the owner and give the leave command"""
+    if ctx.author.name in _admins:
+        await ctx.leave_server(ctx.server)
+    else:
+        await ctx.send("❌ You don't have permission to make the bot leave.")
     
 @bot.command()
 async def clear_history(ctx):
-    if not ctx.channel.id in channel_whitelist:
+    if not ctx.channel.id in _channel_whitelist:
         return
-    if not ctx.author.name == "yuuta_togashi." or ctx.author == bot.user:
+    if not ctx.author.name in _admins or ctx.author == bot.user:
         await ctx.send("❌ You don't have permission to clear the chat history.")
         return
     """Clears upto 100 messages in the channel"""
@@ -91,12 +103,12 @@ async def clear_history(ctx):
     await ctx.send("✅ Chat history cleared.")
 
 @bot.command()
-async def cleardm(ctx, amount: int):
+async def cleardm(ctx, amount: int = 100):
     """
     Deletes the last X messages sent by the bot in this DM. 
     Usage: !cleardm 10
     """
- 
+
     # Ensure it's a DM
     if not isinstance(ctx.channel, discord.DMChannel):
         await ctx.send("❌ This command only works in DMs.")
@@ -134,7 +146,7 @@ async def on_message(message):
     print(f"{message.channel.id}\t{message.author.name}\t{message.content}") 
 
    # Only respond in the target channel
-    if message.channel.id  in channel_whitelist:
+    if message.channel.id  in _channel_whitelist:
         
         if message.content[0] == '!':
             await bot.process_commands(message)
@@ -149,4 +161,4 @@ async def on_message(message):
             return
     # Keep commands working
 
-bot.run(TOKEN)
+bot.run(_TOKEN)

@@ -3,17 +3,16 @@ import numpy as np
 import sounddevice as sd
 import threading
 import time
-import yaml
 import pathlib
-with open('character_config.yaml', 'r') as f:
-    char_config = yaml.safe_load(f)
+
+from process.common.config import char_config
 
 audio_buffer = bytearray()
 buffer_lock = threading.Lock()
 
 end_of_stream = threading.Event()
 
-def stream_audio(response, warmup_event, warmup_bytes, end_of_stream):
+def _stream_audio(response, warmup_event, warmup_bytes, end_of_stream):
     global audio_buffer
 
     buffered = 0
@@ -38,7 +37,7 @@ def stream_audio(response, warmup_event, warmup_bytes, end_of_stream):
         print("[INFO] server finished streaming")
         end_of_stream.set()
 
-def play_stream(end_of_stream,sample_rate=32000, channels=1, dtype=np.int16):
+def _play_stream(end_of_stream,sample_rate=32000, channels=1, dtype=np.int16):
 
     bytes_per_frame = np.dtype(dtype).itemsize * channels
 
@@ -88,7 +87,7 @@ ref_audio_path = pathlib.Path(char_config['sovits_ping_config']['ref_audio_path'
 prompt_text = char_config['sovits_ping_config']['prompt_text']
 prompt_lang = char_config['sovits_ping_config']['prompt_lang']
 
-def sovits_stream(text: str, sample_rate: int = 32000, channels: int = 1, dtype: np.dtype = np.int16):
+def stream(text: str, sample_rate: int = 32000, channels: int = 1, dtype: np.dtype = np.int16):
 
     url = "http://127.0.0.1:9880/tts"
 
@@ -114,7 +113,7 @@ def sovits_stream(text: str, sample_rate: int = 32000, channels: int = 1, dtype:
     warmup_bytes = int(sample_rate * warmup_ms / 1000) * bytes_per_frame
 
     threading.Thread(
-        target=stream_audio,
+        target=_stream_audio,
         args=(response, warmup_event, warmup_bytes, end_of_stream),
         daemon=True
     ).start()
@@ -127,9 +126,9 @@ def sovits_stream(text: str, sample_rate: int = 32000, channels: int = 1, dtype:
 
     print("[INFO] starting playback")
 
-    play_stream(end_of_stream,sample_rate, channels, dtype)
+    _play_stream(end_of_stream,sample_rate, channels, dtype)
 
 
 if __name__ == "__main__":
     text = input("Enter text:\n")
-    sovits_stream(text)
+    stream(text)

@@ -1,13 +1,11 @@
-import os
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
 from faster_whisper import WhisperModel
 import torch
 import time
-# Global Silero VAD model cache for performance
-vad_model = None
 
+_vad_model = None
 
 try:
     # Pip method
@@ -15,7 +13,7 @@ try:
     from silero_vad import load_silero_vad, get_speech_timestamps
     # Load model
     
-    model = load_silero_vad()
+    _model = load_silero_vad()
     print("Silero VAD model loaded.")
     # Soundfile backend read function
     def read_audio_with_soundfile(file_path):
@@ -24,23 +22,21 @@ try:
         return torch.from_numpy(audio).float()
     
     # Cache for fast reuse
-    vad_model = {
-        'model': model,
+    _vad_model = {
+        'model': _model,
         'read_audio': read_audio_with_soundfile,
         'get_speech_timestamps': get_speech_timestamps
     }
     
-    
 except ImportError:
-    print("Install: pip install silero-vad soundfile torch")
+    print("Run `Install: pip install silero-vad soundfile torch`")
 
 
 
-def silero_vad_detection(audio_chunk, vad_model, sampling_rate=16000, threshold=0.5):
-
-    # Use Silero VAD for speech detection
-
-
+def _silero_vad_detection(audio_chunk, vad_model, sampling_rate=16000, threshold=0.5):
+    """
+    Use Silero VAD for speech detection
+    """
     try:
         # Convert audio chunk to tensor and ensure correct format
         if sampling_rate != 16000:
@@ -69,14 +65,15 @@ def silero_vad_detection(audio_chunk, vad_model, sampling_rate=16000, threshold=
         print(f"VAD error: {e}, using energy detection")
         return None
     
-def monitor_and_transcribe(model, samplerate=16000):
-    # Load VAD model (cached globally for performance)
-    global vad_model
+_samplerate=16000
+_model = WhisperModel("distil-small.en", device="cuda", compute_type="int8_float16")
+def monitor_and_transcribe():
+    global _vad_model
 
     print("⏳ Listening for speech...")
     # Audio recording parameters
     chunk_duration = 0.5  # Process audio in 0.5 second chunks
-    chunk_size = int(samplerate * chunk_duration)
+    chunk_size = int(_samplerate * chunk_duration)
     min_speech_duration = 1  # Minimum seconds of speech to record
     silence_timeout = 2.0  # Stop recording after X seconds of silence
     max_silence_samples = int(silence_timeout / chunk_duration)
@@ -99,7 +96,7 @@ def monitor_and_transcribe(model, samplerate=16000):
         
         if not is_recording:
             # Check for speech start with VAD
-            speech_detected = silero_vad_detection(audio_chunk, vad_model, samplerate)
+            speech_detected = _silero_vad_detection(audio_chunk, _vad_model, _samplerate)
             
             if speech_detected:
                 print("🟢 Speech detected! Starting recording...")
@@ -116,7 +113,7 @@ def monitor_and_transcribe(model, samplerate=16000):
             speech_duration += chunk_duration
             
             # Check speech activity
-            speech_detected = silero_vad_detection(audio_chunk, vad_model, samplerate)
+            speech_detected = _silero_vad_detection(audio_chunk, _vad_model, _samplerate)
             
             if speech_detected:
                 # Speech detected - reset silence counter
@@ -134,7 +131,7 @@ def monitor_and_transcribe(model, samplerate=16000):
                     return  # Exit callback to trigger stream closure
     
     # Start recording stream
-    with sd.InputStream(samplerate=samplerate, channels=1, dtype='float32', 
+    with sd.InputStream(samplerate=_samplerate, channels=1, dtype='float32', 
                         callback=callback, blocksize=chunk_size):
         # Keep stream alive until should_stop is set
         while not should_stop:
@@ -152,7 +149,7 @@ def monitor_and_transcribe(model, samplerate=16000):
     print("🎯 Transcribing...")
     
     # Transcribe using faster-whisper
-    segments, info = model.transcribe(recording, beam_size=5, vad_filter =False)
+    segments, info = _model.transcribe(recording, beam_size=5, vad_filter =False)
     transcription = " ".join([segment.text for segment in segments])
     
     print(f"Transcription: {transcription}")
@@ -162,10 +159,9 @@ def monitor_and_transcribe(model, samplerate=16000):
 # Test code
 if __name__ == "__main__":
     print("Testing auto transcriber with VAD...")
-    model = WhisperModel("distil-small.en", device="cuda", compute_type="int8_float16")
     result = ""
     print("Say 'Stop.' to exit.")
     while result != "Stop.":
-        result = monitor_and_transcribe(model)
+        result = monitor_and_transcribe()
         print(f"Got: '{result}'")
     print("Heard Stop, Exiting...")

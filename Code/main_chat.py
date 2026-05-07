@@ -1,22 +1,12 @@
-from faster_whisper import WhisperModel
-from process.asr_func.auto_transcriber import monitor_and_transcribe
-from process.llm_funcs.llm_scr import Riko_Response
-from process.tts_func.sovits_streaming import sovits_stream
-
-### transcribe audio 
-import soundfile as sf
-
-def get_wav_duration(path):
-    with sf.SoundFile(path) as f:
-        return len(f) / f.samplerate
-
+from process.voice_scripts.speech_recognition import monitor_and_transcribe
+from process.llm_scripts.module import Riko_Response
+from process.voice_scripts.voice_generator import stream
 
 print(' \n ========= Starting Chat... ================ \n')
-whisper_model = WhisperModel("distil-small.en", device="cuda", compute_type="int8_float16")
 
 while True:
     try:
-        user_spoken_text = "(Senpai) " + monitor_and_transcribe(whisper_model)
+        user_spoken_text = "(Senpai) " + monitor_and_transcribe()
 
         ### pass to LLM and get a LLM output.
         tts_read_text, reasoning = Riko_Response(user_spoken_text)
@@ -28,7 +18,7 @@ while True:
         
         tts_read_text = tts_read_text.rsplit("timestamp:", 1)[0].split("(Riko) ", 1)[-1].strip()
         try:
-            sovits_stream(tts_read_text)
+            stream(tts_read_text)
         except KeyboardInterrupt as e:
             print(f"[Keyboard Interrupt Called]: {e}")
         

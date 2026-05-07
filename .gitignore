@@ -4,10 +4,10 @@ recording.wav
 character_config.yaml
 tempCodeRunnerFile.*
 __pycache__/
+*.pyc
 conversation.wav
 memory_store.json
 faiss_index.index
-*.pyc
 /screenshots
 .env
 /.venv

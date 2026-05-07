@@ -5,12 +5,14 @@ import time
 import json
 import pathlib
 import torch
-import yaml
 from datetime import datetime
 import tempfile
 import os
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import uuid
+
+from process.llm_scripts.utils import get_llm_token_length
+from process.common.config import char_config
 
 _DEBUG = True
 
@@ -18,12 +20,9 @@ def _debug_out(text: str):
     if _DEBUG:
         print (text)
 
-# === Load Character Configuration ===
-with open('character_config.yaml', 'r') as f:
-    char_config = yaml.safe_load(f)
 
 # === Summarizer functions ===
-_SUMMARY_MODEL_ID = char_config['RAG_params']['model_id']
+_SUMMARY_MODEL_ID = char_config['RAG_params']['summary_model_id']
 _SUMMARY_NUM_BEAMS = char_config['RAG_params']['summary_beam_size']
 _SUMMARY_MAX_TOKENS = char_config['RAG_params']['summary_max_tokens']
 
@@ -171,27 +170,33 @@ def cleanup_memory_store():
 
 
 
+_HEADER_TEXT = """### Relevant Memories
+These are past interactions that may be relevant.
+"""
+_MAX_MEMORY_TOKENS = char_config['RAG_params']['max_token_budget']
+_HEADER_TOKENS = get_llm_token_length(_HEADER_TEXT)
 def get_RAG_context(user_input):
     """
       Query long-term memory for related past experiences.
     """
-    ranked_memories = _get_relevant_memories(user_input)
-    if not ranked_memories:
+    memories = _get_relevant_memories(user_input)
+    if not memories:
         return ""
     
-    memory_snippets = "\n".join([f"- {m['text']} (timestamp:{m['timestamp']})" for m in ranked_memories])
-    return f"""
-### Relevant Memories
-These are past interactions that may be relevant.
-Use them only if useful.
-{memory_snippets}    
-"""
+    # Ensure memory tokens are within the limit.
+    token_count = sum((memory["tokens"] for memory in memories), _HEADER_TOKENS)
 
-_TOP_K = char_config['RAG_params']['default_top_k']    
+    while token_count > _MAX_MEMORY_TOKENS and memories:
+        removed_memory = memories.pop()  # pop from **end**, the lowest-ranked
+        token_count -= removed_memory["tokens"]
+
+    memory_snippets = "\n".join([f"- {m['text']} timestamp:{m['created_on']}" for m in memories])
+    return f"""{_HEADER_TEXT}{memory_snippets}"""
+
 def _get_relevant_memories(prompt):
     """retrieve relevant memories based on a prompt, returns K memories"""
 
-    indices, similarity = _query_faiss_cpu(prompt, _TOP_K)
+    indices, similarity = _query_faiss_cpu(prompt)
     id_to_index = {m['id']: i for i, m in enumerate(_memory_store)}
     # Rank memories by importance, decay, and similarity
     ranked_memories = []
@@ -206,28 +211,31 @@ def _get_relevant_memories(prompt):
         ranked_score = memory['importance_score'] * decay * 0.6 + similarity_score * 0.4
         ranked_memories.append({
             "text": memory["text"],
-            "timestamp": memory["timestamp"],
+            "created_on": memory["created_on"],
             "ranked_score": ranked_score,
+            "tokens": memory["tokens"]
         })
 
         # Update access count and importance
-        _memory_store[id_to_index[idx]]['access_count'] += 1
-        _update_memory_importance(_memory_store[id_to_index[idx]])
+        memory['access_count'] += 1
+        memory['last_access'] = datetime.now().isoformat()
+        _update_memory_importance(memory)
 
     ranked_memories.sort(key=lambda x: x['ranked_score'], reverse=True)
 
     _decay_memory_store()
     return ranked_memories
 
-def _query_faiss_cpu(text, k=5):
+_TOP_K = char_config['RAG_params']['max_memories']
+def _query_faiss_cpu(text):
     """query FAISS-CPU for relevant memories"""
     query_embedding = _get_embedding(text)
-    similarity, indices = _faiss_index.search(query_embedding, k)  # Get top-k indices and distances
+    similarity, indices = _faiss_index.search(query_embedding, _TOP_K)  # Get top-k indices and distances
     return indices, similarity
 
 _AGE_DIV_FACTOR = 60 * 60 * 24
 def _get_age_in_days(memory):
-    return  (time.time() - datetime.fromisoformat(memory['timestamp']).timestamp()) / _AGE_DIV_FACTOR
+    return  (time.time() - datetime.fromisoformat(memory['last_access']).timestamp()) / _AGE_DIV_FACTOR
 
 def _update_memory_importance(memory):
     """Function to update memory importance based on access count"""
@@ -261,7 +269,7 @@ def _decay_memory_store():
 
 
 _DEFAULT_MEMORY_IMPORTANCE = char_config['RAG_params']['default_importance_score']
-def add_message_to_memory(message_text : str, message_time : str, context):
+def add_message_to_memory(message_text : str, message_time : str, message_tokens : int, context):
     """Adds a message to long-term memory with default importance."""
     # === Skip tiny messages ===
     if len(message_text) < 25:
@@ -275,13 +283,16 @@ def add_message_to_memory(message_text : str, message_time : str, context):
         return
 
     memory_text = _self_reflection(message_text, context)
+    
     # format new memory entry
     new_memory = {
         "id": int(uuid.uuid4().int % (2**63)),  # inline UUID
         "text": memory_text,
         "importance_score": _DEFAULT_MEMORY_IMPORTANCE ,
         "timestamp": message_time,
+        "last_access": message_time,
         "access_count": 0,
+        "tokens" : message_tokens,
         "detailed": True,
     }
     _memory_store.append(new_memory)
@@ -292,8 +303,9 @@ def add_message_to_memory(message_text : str, message_time : str, context):
     _save_memory_store()
     _save_faiss_index()
 
-
-_MAX_REFLECTION_TOKENS = char_config["Self_reflection_params"]["token_limit"]
+_REFLECTION_MODEL_ID = char_config["Self_reflection_params"]["model_id"]
+_MAX_REFLECTION_INPUT = char_config["Self_reflection_params"]["context_limit"]
+_MAX_REFLECTION_OUTPUT = char_config["Self_reflection_params"]["token_limit"]
 def _self_reflection(message: str, context) -> str:
     """
     Generate a detailed first-person reflection for a message given the current context.
@@ -301,6 +313,7 @@ def _self_reflection(message: str, context) -> str:
     - context: list, previous messages in rolling context
     Returns: str, detailed self-reflection
     """
+    return message
     # Flatten context safely
     context_text = ""
     for msg in context:
@@ -319,34 +332,13 @@ def _self_reflection(message: str, context) -> str:
 
     # Build robust prompt
     prompt = (
-        f"Current context (older messages):\n{context_text}\n\n"
-        f"New message (latest):\n{message}\n\n"
         "Instruction: Write a detailed, first-person reflection summarizing this new message. "
         "Include explicit facts, nuances, and relationships for future memory retrieval. "
-        "Focus on the user's text first, but include relevant context if necessary."
+        "Focus on the user's text first, but include relevant context as necessary. "
+        f"Current context (older messages):\n{context_text}\n\n"
+        f"New message (latest):\n{message}\n\n"
     )
 
-    # Tokenize with truncation: prioritize keeping the latest message
-    inputs = _summary_tokenizer(
-        prompt,
-        return_tensors="pt",
-        truncation=True,
-        max_length=_MAX_REFLECTION_TOKENS
-    )
-    if torch.cuda.is_available():
-        inputs = {k: v.to("cuda") for k, v in inputs.items()}
-
-    # Generate reflection
-    with torch.inference_mode():    
-        output_ids = _summary_model.generate(
-            **inputs,
-            max_length=_MAX_REFLECTION_TOKENS,
-            num_beams=4,
-            early_stopping=True
-        )
-
-    # Decode output
-    self_reflection = _summary_tokenizer.decode(output_ids[0], skip_special_tokens=True)
     return self_reflection
 
 # ================ Memory Store Functions ===================
@@ -394,7 +386,8 @@ def _load_memory_store():
         _memory_store.append({
             "text": mem["text"],
             "importance_score": mem["importance_score"],
-            "timestamp": currentTime,
+            "created_on": currentTime,
+            "last_access": currentTime,
             "access_count": mem.get("access_count", 0),
             "detailed": mem.get("detailed", True),
         })
@@ -424,6 +417,18 @@ def _save_memory_store():
 
 
 
+def migrate_memories():
+    """Fixes the tokens for each memory to match the new model used.
+    This must be run before switching models
+    """
+
+    text = [f'{m["text"]} timestamp:{m['created_on']}' for m in _memory_store]
+    tokens = get_llm_token_length(text)
+
+    for memory, token_count in zip(_memory_store, tokens):
+        memory["tokens"] = token_count
+
+
 # === Initialize RAG Memory System ===
 _faiss_index = _load_faiss_index()
 _memory_store = _load_memory_store()
@@ -434,12 +439,12 @@ if _faiss_index.ntotal == 0:
 
 
 # Test script
-if __name__ == "__main__":
-    prompt = "Tell me more about yourself?"
-    ranked_memories = _get_relevant_memories(prompt)
-
-    print("Ranked Memories:")
-    for memory in ranked_memories:
-        print(f"Memory Text: {memory['text']}")
-    
+def test_script():
+    migrate_memories()
     cleanup_memory_store()
+    
+    prompt = "Tell me more about yourself?"
+    memories = get_RAG_context(prompt)
+    print(memories)
+    
+

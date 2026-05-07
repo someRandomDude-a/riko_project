@@ -1,15 +1,14 @@
-import yaml
 import json
 from openai import OpenAI
-from process.llm_funcs.Memory_system.long_term_memory import get_RAG_context, add_message_to_memory 
 from datetime import datetime
-from transformers import AutoTokenizer
 import pathlib
 import os
 import tempfile
-with open('character_config.yaml', 'r') as f:
-    char_config = yaml.safe_load(f)
+from collections import deque
 
+from process.llm_scripts.Memory_system.long_term_memory import get_RAG_context, add_message_to_memory 
+from process.llm_scripts.utils import get_llm_token_length
+from process.common.config import char_config
 
 
 # === Utility: Load and Save Chat History ===
@@ -17,13 +16,13 @@ _HISTORY_FILE = char_config['history_file']
 _HISTORY_FILE = pathlib.Path(_HISTORY_FILE).resolve()
 _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-def _load_history():
+def _load_history() -> deque[dict] | None:
     if _HISTORY_FILE.is_file():
         try:
             with open(_HISTORY_FILE, "r") as f:
                 hist = json.load(f)
                 if isinstance(hist, list):
-                    return hist
+                    return deque(hist) 
         except json.JSONDecodeError:
             print("[WARN] History file is corrupted. Starting fresh history.")
     return None
@@ -37,84 +36,13 @@ def _save_history():
         delete=False,
         encoding="utf-8"
     ) as tmp:
-        json.dump(_history, tmp, indent=2)
+        json.dump(list(_history), tmp, indent=2)
         tmp.flush()
         os.fsync(tmp.fileno())
         temp_path = pathlib.Path(tmp.name)
 
     temp_path.replace(_HISTORY_FILE)
 
-
-tokenizer = AutoTokenizer.from_pretrained(char_config['tokenizer_model'])
-def get_llm_token_length(text : str | list[str]) -> int | list[int]:
-    """Returns the number of tokens in a given string, or an array of lengths for each string in a string array"""
-    lengths = tokenizer(text, add_special_tokens = False, return_length=True)["length"]
-    if isinstance(text, str):
-        return lengths[0]
-    return lengths
-
-# === Handle context overflow ===
-_MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
-def handle_rolling_window():
-    """When context window is full, archive old messages into long-term memory."""
-
-    if not _history:
-        print("[INFO] No history to manage.")
-        return
-    
-    token_count = 0 
-    for msg in _history:
-        if "tokens" not in msg:
-            msg["tokens"] = get_llm_token_length(msg["content"][0]["text"])
-        token_count += msg["tokens"]
-
-    if token_count <= _MAX_HISTORY_TOKENS:
-        return
-    
-    while token_count >= _MAX_HISTORY_TOKENS or _history[0]["role"] != "user":
-        # Pop oldest non-system message
-        dropped_message = _history.pop(0)
-        token_count -= dropped_message["tokens"]
-
-        if dropped_message["role"] == "system":
-            continue
-
-        message = dropped_message["content"][0]["text"]
-        message_text = message.split(" timestamp:", 1)[0]
-        message_time = message.rsplit(" timestamp:", 1)[-1].strip()
-
-        # ensure every message has a valid timestamp
-        try:
-            datetime.fromisoformat(message_time)
-        except ValueError:
-            message_time = datetime.now().isoformat(timespec="minutes")
-
-        add_message_to_memory(message_text, message_time, _history)
-
-    print("[INFO] Context window managed. Updated history saved. final history token count: ",token_count)
-    _save_history()
-
-
-_client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])
-_MODEL = char_config['model']
-_MAX_OUTPUT_TOKENS = char_config['presets']['default']['model_params']['max_output_tokens']
-_TEMPERATURE = char_config['presets']['default']['model_params']['temperature']
-def _call_llm_api(messages):
-    """Core LLM Call"""
-    response = _client.responses.create(
-        model=_MODEL,
-        input=messages,
-        max_output_tokens= _MAX_OUTPUT_TOKENS,
-        temperature=_TEMPERATURE,
-        stream=False,
-        text={
-            "format": {
-            "type": "text"
-            }
-        },
-        store=False,
-    )
-    return response
 
 
 _SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
@@ -186,3 +114,70 @@ def Riko_Response(user_input: str, time_now = None):
     _history = messages[1:]# Skip the first element as it's the system setup message and RAG memories
     _save_history() 
     return response_text, reasoning
+
+
+# === Handle context overflow ===
+_MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
+_SYSTEM_INSTRUCTIONS_TOKENS = get_llm_token_length(_SYSTEM_INSTRUCTIONS)
+def handle_rolling_window():
+    """When context window is full, archive old messages into long-term memory."""
+
+    if not _history:
+        print("[INFO] No history to manage.")
+        return
+    
+    token_count = _SYSTEM_INSTRUCTIONS_TOKENS
+    for msg in _history:
+        if "tokens" not in msg:
+            msg["tokens"] = get_llm_token_length(msg["content"][0]["text"])
+        token_count += msg["tokens"]
+
+    if token_count <= _MAX_HISTORY_TOKENS:
+        return
+    
+    while token_count >= _MAX_HISTORY_TOKENS or _history[0]["role"] != "user":
+        # Pop oldest non-system message
+        dropped_message = _history.popleft()
+        token_count -= dropped_message["tokens"]
+
+        if dropped_message["role"] == "system":
+            continue
+
+        message = dropped_message["content"][0]["text"]
+        message_text = message.split(" timestamp:", 1)[0]
+        message_time = message.rsplit(" timestamp:", 1)[-1].strip()
+        message_tokens = dropped_message["tokens"]
+
+        # ensure every message has a valid timestamp
+        try:
+            datetime.fromisoformat(message_time)
+        except ValueError:
+            message_time = datetime.now().isoformat(timespec="minutes")
+
+        add_message_to_memory(message_text, message_time, message_tokens, _history)
+
+    print(f"[INFO] Context window managed. Updated history saved. final history token count: {token_count}")
+    _save_history()
+
+
+_client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])
+_MODEL = char_config['model']
+_MAX_OUTPUT_TOKENS = char_config['presets']['default']['model_params']['max_output_tokens']
+_TEMPERATURE = char_config['presets']['default']['model_params']['temperature']
+def _call_llm_api(messages):
+    """Core LLM Call"""
+    response = _client.responses.create(
+        model=_MODEL,
+        input=messages,
+        max_output_tokens= _MAX_OUTPUT_TOKENS,
+        temperature=_TEMPERATURE,
+        stream=False,
+        text={
+            "format": {
+            "type": "text"
+            }
+        },
+        store=False,
+    )
+    return response
+

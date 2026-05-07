@@ -32,7 +32,7 @@ def get_embedding(image_path):
 if __name__ == "__main__":
     while input("Press enter to continue or type Stop to end") != "Stop":
         
-        from get_screenshot import get_screenshot
+        from server.process.llm_scripts.MCP_Tools.image_embedding.get_screenshot import get_screenshot
         print("Testing image captioning...")
         test_image_path = get_screenshot()  # Replace with your test image path if u want
         caption = get_embedding(test_image_path)
