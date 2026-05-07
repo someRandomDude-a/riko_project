@@ -22,7 +22,7 @@ def _load_history() -> deque[dict] | None:
             with open(_HISTORY_FILE, "r") as f:
                 hist = json.load(f)
                 if isinstance(hist, list):
-                    return deque(hist) 
+                    return hist
         except json.JSONDecodeError:
             print("[WARN] History file is corrupted. Starting fresh history.")
     return None
@@ -36,7 +36,7 @@ def _save_history():
         delete=False,
         encoding="utf-8"
     ) as tmp:
-        json.dump(list(_history), tmp, indent=2)
+        json.dump(_history, tmp, indent=2)
         tmp.flush()
         os.fsync(tmp.fileno())
         temp_path = pathlib.Path(tmp.name)
@@ -147,7 +147,7 @@ def handle_rolling_window():
     
     while token_count >= _MAX_HISTORY_TOKENS or _history[0]["role"] != "user":
         # Pop oldest non-system message
-        dropped_message = _history.popleft()
+        dropped_message = _history.pop(0)
         token_count -= dropped_message["tokens"]
 
         if dropped_message["role"] == "system":
