@@ -117,6 +117,15 @@ uv pip install -r requirements.txt
 python main_chat.py
 ```
 
+## The flow:
+
+1. Riko listens to your voice via microphone (Voice Activity Detection)
+2. Transcribes it with Faster-Whisper
+3. Passes it to LM studio
+4. Generates a response
+5. Synthesizes Riko's voice using GPT-SoVITS
+6. Plays the output back to you
+
 ## Discord Bot
 
 ### Create .env file in root folder
@@ -127,19 +136,20 @@ Discord_admins= "User1", "User2", "User3"
 Discord_channel_whitelist= Comma , Seperated , Values
 ```
 
-## The flow:
-
-1. Riko listens to your voice via microphone (Voice Activity Detection)
-2. Transcribes it with Faster-Whisper
-3. Passes it to LM studio
-4. Generates a response
-5. Synthesizes Riko's voice using GPT-SoVITS
-6. Plays the output back to you
+## Run discord_bot.py
 
 # Goal:
 
-We want too make an RAG based vector database that will store "memories" that the AI model deems important enough too remember
-we will also query this database too retrieve relevant memories from the database as required according too the prompt (eventually it might be done according too what the AI model asks about)
+Simulate how the human brain works
+- memories
+- reasoning
+- expression through Vtuber model, voice directions etc
+
+**AND make it all run on a budget.  
+The aim is to run on 8gb of VRAM and 32gb of system ram.  
+All while running everything on your local machine**
+
+Make this AI feel as real as possible. (Maybe even too real)
 
 ## Features :
 
@@ -147,8 +157,10 @@ we will also query this database too retrieve relevant memories from the databas
 * Vector store - stores and retrieves embeddigns
 * Memory manager -
   * Adding new memories
+  * self reflection on memories
   * Updating memory importance
   * Decaying old memories
+  * summarizing old memories
   * retrieving top-k relevant memories
 * Build the new prompt based on these and passing it to an LLM
 * Read PDF files images and other attachments from discord bot
@@ -161,9 +173,12 @@ we will also query this database too retrieve relevant memories from the databas
 * [ ] Emotion or tone control in speech synthesis
 * [ ] VRM model frontend
 * [ ] Avatar using V-tube studio
-* [ ] Ability too see the users screen -> The plan is to use CLIP and tesseract too generate context
+* [ ] Ability too see the users screen
 * [ ] Ability too type / edit code directly for the user
 * [ ] Ability too Hear emotion and tone in the user voice
+* [ ] RAG memory system for long term personality
+* [ ] QLora personality training to permanently remember personality tones, facts and episodic memories
+* [ ] Dreaming and self reflection for Qlora training (automating the personality pipeline)
 
 
 ## 🧑‍🎤 Credits
