@@ -1,6 +1,6 @@
 # Project Riko
 
-## ✨ Features
+## Features
 
 - 💬 **LLM-based dialogue** using LM Studio API (configurable system prompts)
 - 🧠 **Conversation memory** to keep context during interactions
@@ -9,7 +9,7 @@
 - 📁 Clean YAML-based config for personality configuration
 - **RAG based hybrid memory structure** Uses summarized and detailed memories along with importance and decaying too emulate human memories
 
-## ⚙️ Configuration
+## Configuration
 
 All prompts and parameters are stored in `character_config.yaml`.
 You must create this file yourself
@@ -91,7 +91,7 @@ Self_reflection_params:
 
 You can define personalities by modiying the config file.
 
-## 🛠️ Setup
+## Setup
 
 ### Install Dependencies
 
@@ -107,7 +107,7 @@ uv pip install -r requirements.txt
 * CUDA & cuDNN installed correctly (for Faster-Whisper GPU support)
 * `ffmpeg` installed (for audio processing)
 
-## 🧪 Usage
+## Usage
 
 1. Launch the GPT-SoVITS API  
 2. Run LM - Studio and its API
@@ -166,7 +166,7 @@ Make this AI feel as real as possible. (Maybe even too real)
 * Read PDF files images and other attachments from discord bot
 
 
-## 📌 TODO / Future Improvements
+## TODO / Future Improvements
 
 * [ ] GUI or web interface
 * [x] Live microphone input support
@@ -181,8 +181,8 @@ Make this AI feel as real as possible. (Maybe even too real)
 * [ ] Dreaming and self reflection for Qlora training (automating the personality pipeline)
 
 
-## 🧑‍🎤 Credits
+## Credits
 
-* Inspired by Riko Project by [Ryan](https://github.com/rayenfeng/riko_project)
+* Inspired from the Riko Project by [Ryan](https://github.com/rayenfeng/riko_project)
 * Voice synthesis powered by [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) - Soon to be replaced with IndexTTS
 * ASR via [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper)
