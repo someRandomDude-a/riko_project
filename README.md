@@ -19,9 +19,10 @@ history_file: ./persistant_memories/chat_history.json
 model : "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive"
 tokenizer_model: "Qwen/Qwen3.5-9B"
 base_url: http://localhost:1234/v1
-api_key: "YOUR-API-KEY-HERE"
+api_key: "YOUR API KEY HERE"
 presets:
   default:
+    name: Riko
     system_prompt: 
       You are Riko, a playful and cute AI assistant. Speak like a girl with a tsundere personality
       You love teasing Senpai, making them smile, and spending fun time together.
@@ -30,7 +31,7 @@ presets:
       Never break character.
     model_params:
       context_window_token_limit: 8192 # this defines the context window size for managing chat history and system prompt
-      max_output_tokens: 2048
+      max_output_tokens: 4096
       temperature: 0.6
     memories: # When no memroy file is found, defaults to these memories
       - text: "I Love Senpai very much"
@@ -66,7 +67,6 @@ sovits_ping_config:
 
 RAG_params:
   embedding_model_id: 'Qwen/Qwen3-Embedding-0.6B'
-  model_id: "google/flan-t5-small"
 
   text_embedding_dim: 1024 # Dimension of embeddings from Sentence-BERT
   default_importance_score: 0.5 # The default importance score assigned to new memories
@@ -76,14 +76,17 @@ RAG_params:
   high_importance_decay_factor: 0.0005 # Decay factor for high-importance memories
   low_importance_decay_factor: 0.001 # Decay factor for low-importance memories
 
-  summary_max_tokens: 2048 # Maximum tokens for the summary model input
+  summary_model_id: "google/flan-t5-small"
+  summary_max_tokens: 684 # Maximum tokens for the summary model input
   summary_beam_size: 4 # Beam search size for summarization
 
   memory_cleanup_threshold: 7 # Days after which memories are considered for cleanup
   memory_importance_threshold: 0.1 # Importance score below which memories are considered for cleanup
 
 Self_reflection_params:
-  token_limit: 256
+  model_id: "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive"
+  token_limit: 512
+  context_limit: 8192
 ```
 
 You can define personalities by modiying the config file.
