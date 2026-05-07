@@ -2,11 +2,11 @@
 
 ## Features
 
-- 💬 **LLM-based dialogue** using LM Studio API (configurable system prompts)
-- 🧠 **Conversation memory** to keep context during interactions
-- 🔊 **Voice generation** via GPT-SoVITS API
-- 🎧 **Speech recognition** using Faster-Whisper
-- 📁 Clean YAML-based config for personality configuration
+- **LLM-based dialogue** using LM Studio API (configurable system prompts)
+- **Conversation memory** to keep context during interactions
+- **Voice generation** via GPT-SoVITS API
+- **Speech recognition** using Faster-Whisper
+- Clean YAML-based config for personality configuration
 - **RAG based hybrid memory structure** Uses summarized and detailed memories along with importance and decaying too emulate human memories
 
 ## Configuration
