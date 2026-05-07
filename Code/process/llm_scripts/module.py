@@ -46,16 +46,19 @@ def _save_history():
 
 
 _SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
+_ASSISTANT_NAME = char_config['presets']['default']['name']
 def Riko_Response(user_input: str, time_now = None):
     """
     Handles user input, manages context, queries memory, and returns model output.
+    Must always include a speaker name in format:
+    `speaker_name: message_text` 
     """
     if time_now == None:
         time_now = datetime.now().isoformat(timespec='minutes')
 
     global _history
     handle_rolling_window()
-    memory_text = get_RAG_context(user_input)
+    memory_text = get_RAG_context(user_input.split(":", 1)[1].strip())
     header = """
 ### Conversation History
 """
@@ -77,21 +80,39 @@ def Riko_Response(user_input: str, time_now = None):
     messages.append({
         "role": "user",
         "content": [
-            {"type": "input_text", "text": user_input + " timestamp:" + time_now}
+            {"type": "input_text", "text": f'[{time_now}] {user_input}'}
         ],
-        "tokens": get_llm_token_length(user_input + " timestamp:" + time_now)
+        "tokens": get_llm_token_length(f'[{time_now}] {user_input}')
     })
-    
     response = _call_llm_api(messages)
-    
-    # replace the AI's parroted timestamp with an accurate timestamp
-    response_text = response.output_text.rsplit("timestamp:")[0].strip()
+
+
+    response_text = response.output_text.strip()
     if not response_text:
-        response_text = "(Riko) ..." 
+        response_text = f"{_ASSISTANT_NAME}: ..."
+
+    #Remove the AI parroted timestamp
+    elif response_text.startswith("[") and "]" in response_text:
+        _, _, response_text = response_text.partition("]")
     
-    if not response_text.startswith("(Riko)"):
-        response_text = "(Riko) " + response_text
-        
+    response_text = response_text.strip()
+    #Ensure speaker name is always included properly
+    if not response_text.startswith(f"{_ASSISTANT_NAME}:"):
+        response_text = f"{_ASSISTANT_NAME}: " + response_text
+
+
+    # Save assistant's response
+    messages.append({
+        "role": "assistant",
+        "content": [
+            {"type": "output_text", "text": f"[{time_now}] {response_text}"}
+        ],
+        "tokens": get_llm_token_length(f"[{time_now}] {response_text}")
+    })
+    _history = messages[1:]# Skip the first element as it's the system setup message and RAG memories
+    _save_history() 
+    
+    reasoning = f"Could not fetch reasoning"
     try:
         for item in response.output:
             if getattr(item, "type", "") == "reasoning":
@@ -99,21 +120,10 @@ def Riko_Response(user_input: str, time_now = None):
                 if content_list:
                     reasoning = content_list[0].text
                 break
-    except Exception as e:
-        reasoning = f"Could not fetch reasoning, {e}"
-
-    # Save assistant's response
-    messages.append({
-        "role": "assistant",
-        "content": [
-            {"type": "output_text", "text": response_text + " timestamp:" + time_now}
-        ],
-        "tokens": get_llm_token_length(response_text + " timestamp:" + time_now)
-    })
-    
-    _history = messages[1:]# Skip the first element as it's the system setup message and RAG memories
-    _save_history() 
-    return response_text, reasoning
+    except Exception:
+        pass
+    final_response = response_text.removeprefix(f"{_ASSISTANT_NAME}:").strip()
+    return final_response, reasoning
 
 
 # === Handle context overflow ===
@@ -143,10 +153,11 @@ def handle_rolling_window():
         if dropped_message["role"] == "system":
             continue
 
-        message = dropped_message["content"][0]["text"]
-        message_text = message.split(" timestamp:", 1)[0]
-        message_time = message.rsplit(" timestamp:", 1)[-1].strip()
         message_tokens = dropped_message["tokens"]
+        message = dropped_message["content"][0]["text"]
+        message_time, _, message_text = message.partition("]")
+        
+        message_time, message_text = message_time[1:], message_text.strip()
 
         # ensure every message has a valid timestamp
         try:

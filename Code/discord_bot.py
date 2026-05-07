@@ -12,8 +12,8 @@ from process.llm_scripts.module import Riko_Response
 
 
 # Config:
-load_dotenv()
 time_offset = datetime.now().astimezone().utcoffset()
+load_dotenv()
 _TOKEN = os.getenv("Discord_bot_token").strip()
 _channel_whitelist = [
     int(ch.strip())
@@ -45,7 +45,7 @@ def worker():
     while True:
         message = llm_response_queue.get()        
 
-        user_text = f"({message.author.display_name}) {message.content}"
+        user_text = f"{message.author.display_name}: {message.content}"
 
         # handle attachments
         for attachment in message.attachments:
@@ -67,13 +67,13 @@ def worker():
             timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='minutes')
             
             response, _ = Riko_Response(user_text, timestamp)
-
+            response = response.strip()[6:]
             
         except Exception as e:
             response = f"⚠️ Error: {e}"
         finally:
             asyncio.run_coroutine_threadsafe(
-                message.reply(f'{response[6:].strip()}'),
+                message.reply(response),
                 discord_loop
             )
             llm_response_queue.task_done()        

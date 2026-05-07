@@ -6,17 +6,13 @@ print(' \n ========= Starting Chat... ================ \n')
 
 while True:
     try:
-        user_spoken_text = "(Senpai) " + monitor_and_transcribe()
+        user_spoken_text = "Senpai: " + monitor_and_transcribe()
 
         ### pass to LLM and get a LLM output.
         tts_read_text, reasoning = Riko_Response(user_spoken_text)
-    
-        print(tts_read_text + "\n\nReasoning:\n" + reasoning)
+        print(f"\n{tts_read_text}\n\nReasoning:\n{reasoning}")
 
         # generate audio and save it to client/audio 
-        # Remove timestamp from tts_read_text before passing it spoken text part that we care about ->  timestamp
-        
-        tts_read_text = tts_read_text.rsplit("timestamp:", 1)[0].split("(Riko) ", 1)[-1].strip()
         try:
             stream(tts_read_text)
         except KeyboardInterrupt as e:

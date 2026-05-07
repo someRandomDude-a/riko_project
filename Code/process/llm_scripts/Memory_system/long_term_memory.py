@@ -190,7 +190,7 @@ def get_RAG_context(user_input):
         removed_memory = memories.pop()  # pop from **end**, the lowest-ranked
         token_count -= removed_memory["tokens"]
 
-    memory_snippets = "\n".join([f"- {m['text']} timestamp:{m['created_on']}" for m in memories])
+    memory_snippets = "\n".join([f"- [{m['created_on']}] {m['text']}" for m in memories])
     return f"""{_HEADER_TEXT}{memory_snippets}"""
 
 def _get_relevant_memories(prompt):
@@ -248,12 +248,11 @@ _MEMORY_DECAY_FACTOR_HIGH = -char_config['RAG_params']['high_importance_decay_fa
 _MEMORY_DECAY_FACTOR_LOW = -char_config['RAG_params']['low_importance_decay_factor'] # Decay factor for low-importance memories 
 def _decay_memory_store():
     """apply timestamp decay and rank memories"""
-    # Decay based on importance: high importance memories decay slower
     for memory in _memory_store:
-        # skip empty (deleted) memories
         if not memory:
             continue
 
+    # Decay based on importance: high importance memories decay slower
         decay = np.exp(
             (_MEMORY_DECAY_FACTOR_HIGH if memory['importance_score'] > 0.8 else _MEMORY_DECAY_FACTOR_LOW) * _get_age_in_days(memory)
         )
@@ -264,6 +263,7 @@ def _decay_memory_store():
             _debug_out("summarizing memory: " + memory['text'])
             memory['text'] = _summarize_text(memory['text'])
             memory['detailed'] = False
+            memory['tokens'] = get_llm_token_length(f"- [{memory['created_on']}] {memory['text']}")
 
 
 
@@ -289,7 +289,7 @@ def add_message_to_memory(message_text : str, message_time : str, message_tokens
         "id": int(uuid.uuid4().int % (2**63)),  # inline UUID
         "text": memory_text,
         "importance_score": _DEFAULT_MEMORY_IMPORTANCE ,
-        "timestamp": message_time,
+        "created_on": message_time,
         "last_access": message_time,
         "access_count": 0,
         "tokens" : message_tokens,
@@ -314,23 +314,6 @@ def _self_reflection(message: str, context) -> str:
     Returns: str, detailed self-reflection
     """
     return message
-    # Flatten context safely
-    context_text = ""
-    for msg in context:
-        for item in msg.get("content", []):
-            text = item.get("text", "").strip()
-            text = text.split(" timestamp:", 1)[0].strip()
-
-            if text:  # skip empty
-                if text.startswith("("):
-                    head, sep, tail = text.partition(")")
-                    if sep:  # found closing parenthesis
-                        speaker = head[1:].strip()
-                        text = f"{speaker}: {tail.strip()}"
-            
-                context_text += text + "\n"
-
-    # Build robust prompt
     prompt = (
         "Instruction: Write a detailed, first-person reflection summarizing this new message. "
         "Include explicit facts, nuances, and relationships for future memory retrieval. "
@@ -338,7 +321,6 @@ def _self_reflection(message: str, context) -> str:
         f"Current context (older messages):\n{context_text}\n\n"
         f"New message (latest):\n{message}\n\n"
     )
-
     return self_reflection
 
 # ================ Memory Store Functions ===================
@@ -383,13 +365,15 @@ def _load_memory_store():
     currentTime = datetime.now().isoformat(timespec='minutes')
 
     for mem in default_memories:
+        created_on = mem.get("date", currentTime)
         _memory_store.append({
             "text": mem["text"],
-            "importance_score": mem["importance_score"],
-            "created_on": currentTime,
-            "last_access": currentTime,
+            "importance_score": mem.get("importance_score", _DEFAULT_MEMORY_IMPORTANCE),
+            "created_on": created_on,
+            "last_access": created_on,
             "access_count": mem.get("access_count", 0),
             "detailed": mem.get("detailed", True),
+            "tokens": get_llm_token_length(f"- [{created_on}] {mem['text']}")
         })
 
     _debug_out("No memories found, Loaded memory store from YAML.")
@@ -417,16 +401,18 @@ def _save_memory_store():
 
 
 
-def migrate_memories():
-    """Fixes the tokens for each memory to match the new model used.
-    This must be run before switching models
-    """
 
-    text = [f'{m["text"]} timestamp:{m['created_on']}' for m in _memory_store]
-    tokens = get_llm_token_length(text)
+def migrate_memories():
+    """update token counts for current model."""
+    # Recompute tokens for the exact snippet format used in the prompt
+    msg_text = [f'- [{m["created_on"]}] {m["text"]}' for m in _memory_store]
+    tokens = get_llm_token_length(msg_text)
 
     for memory, token_count in zip(_memory_store, tokens):
         memory["tokens"] = token_count
+
+    _save_memory_store()
+    _debug_out("Memory tokens updated and saved.")
 
 
 # === Initialize RAG Memory System ===
