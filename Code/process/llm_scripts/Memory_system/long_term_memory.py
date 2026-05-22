@@ -432,5 +432,3 @@ def test_script():
     prompt = "Tell me more about yourself?"
     memories = get_RAG_context(prompt)
     print(memories)
-    
-
