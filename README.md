@@ -176,7 +176,7 @@ Make this AI feel as real as possible. (Maybe even too real)
 * [ ] Ability too see the users screen
 * [ ] Ability too type / edit code directly for the user
 * [ ] Ability too Hear emotion and tone in the user voice
-* [ ] RAG memory system for long term personality
+* [x] RAG memory system for long term personality
 * [ ] QLora personality training to permanently remember personality tones, facts and episodic memories
 * [ ] Dreaming and self reflection for Qlora training (automating the personality pipeline)
 
