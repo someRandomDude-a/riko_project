@@ -41,8 +41,6 @@ def worker():
         Worker thread to process LLM responses sequentialy.
         To use, put messages in llm_response_queue.
     """
-    if discord_loop is None:
-        raise ValueError("variable `discord_loop` was not assigned correctly")
     while True:
         message = llm_response_queue.get()        
 

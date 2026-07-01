@@ -67,7 +67,7 @@ def llm_response(user_message: str, user_name: str, time_now: str | None = None)
             "content": [
                 {
                     "type": "input_text",
-                    "text": _SYSTEM_INSTRUCTIONS + memory_text + header
+                    "text": _SYSTEM_PROMPT + memory_text + header
                 }
             ]
         }
@@ -127,7 +127,7 @@ def llm_response(user_message: str, user_name: str, time_now: str | None = None)
 
 # handle context overflow
 _MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
-_SYSTEM_INSTRUCTIONS_TOKENS = get_llm_token_length(_SYSTEM_INSTRUCTIONS)
+_SYSTEM_INSTRUCTIONS_TOKENS = get_llm_token_length(_SYSTEM_PROMPT)
 def handle_rolling_window():
     """
     When context window is full, archive old messages into long-term memory.
