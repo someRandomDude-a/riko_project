@@ -12,22 +12,6 @@ class Tool(BaseTool):
   This tool automatically processes PDF files attached by the user.
 """
 
-    def _setup(self):
-        """Verify that pypdf is installed and working."""
-        try:
-            # Dummy PDF to catch import issues early
-            PdfReader(io.BytesIO(
-                b"%PDF-1.4\n1 0 obj\n<<\n>>\nendobj\nxref\n0 1\n0000000000 65535 f \n"
-                b"trailer\n<<\n/Size 1\n>>\nstartxref\n39\n%%EOF"
-            ))
-        except Exception as e:
-            raise RuntimeError(
-                "pdf_extractor: Failed to initialize PdfReader - is pypdf installed correctly?"
-            ) from e
-
-        if self.context and "logger" in self.context:
-            self.context["logger"].info("pdf_extractor initialized successfully")
-
     def _call(self, file_bytes: bytes) -> str: # type: ignore
         """
         Extract all text from a PDF given as bytes.
