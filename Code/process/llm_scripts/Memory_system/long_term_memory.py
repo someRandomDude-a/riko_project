@@ -271,11 +271,11 @@ def _decay_memory_store():
 _DEFAULT_MEMORY_IMPORTANCE = char_config['RAG_params']['default_importance_score']
 def add_message_to_memory(message_text : str, message_time : str, message_tokens : int, context):
     """Adds a message to long-term memory with default importance."""
-    # === Skip tiny messages ===
+    # Skip tiny messages
     if len(message_text) < 25:
         return
 
-    # === Skip duplicates ===
+    # Skip duplicates
     embedding = _get_embedding(message_text)
     D, I = _faiss_index.search(embedding, 1)
     if D[0][0] > 0.8:  # Threshold depends on embedding space

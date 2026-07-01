@@ -4,19 +4,18 @@ from datetime import datetime
 import pathlib
 import os
 import tempfile
-from collections import deque
 
 from process.llm_scripts.Memory_system.long_term_memory import get_RAG_context, add_message_to_memory 
 from process.llm_scripts.utils import get_llm_token_length
 from process.common.config import char_config
 
 
-# === Utility: Load and Save Chat History ===
+# Load and Save Chat History ===
 _HISTORY_FILE = char_config['history_file']
 _HISTORY_FILE = pathlib.Path(_HISTORY_FILE).resolve()
 _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-def _load_history() -> deque[dict] | None:
+def _load_history() -> list[dict]:
     if _HISTORY_FILE.is_file():
         try:
             with open(_HISTORY_FILE, "r") as f:
@@ -25,7 +24,7 @@ def _load_history() -> deque[dict] | None:
                     return hist
         except json.JSONDecodeError:
             print("[WARN] History file is corrupted. Starting fresh history.")
-    return None
+    return []
 
 _history = _load_history()
 
@@ -47,18 +46,18 @@ def _save_history():
 
 _SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
 _ASSISTANT_NAME = char_config['presets']['default']['name']
-def Riko_Response(user_input: str, time_now = None):
+def llm_response(user_message: str, user_name: str, time_now: str | None = None):
     """
     Handles user input, manages context, queries memory, and returns model output.
     Must always include a speaker name in format:
     `speaker_name: message_text` 
     """
-    if time_now == None:
+    if time_now is None:
         time_now = datetime.now().isoformat(timespec='minutes')
 
     global _history
     handle_rolling_window()
-    memory_text = get_RAG_context(user_input.split(":", 1)[1].strip())
+    memory_text = get_RAG_context(user_message)
     header = """
 ### Conversation History
 """
@@ -80,9 +79,9 @@ def Riko_Response(user_input: str, time_now = None):
     messages.append({
         "role": "user",
         "content": [
-            {"type": "input_text", "text": f'[{time_now}] {user_input}'}
+            {"type": "input_text", "text": f'[{time_now}] {user_name}: {user_message}'}
         ],
-        "tokens": get_llm_token_length(f'[{time_now}] {user_input}')
+        "tokens": get_llm_token_length(f'[{time_now}] {user_name}: {user_message}')
     })
     response = _call_llm_api(messages)
 
@@ -91,17 +90,17 @@ def Riko_Response(user_input: str, time_now = None):
     if not response_text:
         response_text = f"{_ASSISTANT_NAME}: ..."
 
-    #Remove the AI parroted timestamp
+    # remove the AI parroted timestamp
     elif response_text.startswith("[") and "]" in response_text:
         _, _, response_text = response_text.partition("]")
     
     response_text = response_text.strip()
-    #Ensure speaker name is always included properly
+    # ensure speaker name is always included properly
     if not response_text.startswith(f"{_ASSISTANT_NAME}:"):
         response_text = f"{_ASSISTANT_NAME}: " + response_text
 
 
-    # Save assistant's response
+    # save assistant response
     messages.append({
         "role": "assistant",
         "content": [
@@ -109,7 +108,7 @@ def Riko_Response(user_input: str, time_now = None):
         ],
         "tokens": get_llm_token_length(f"[{time_now}] {response_text}")
     })
-    _history = messages[1:]# Skip the first element as it's the system setup message and RAG memories
+    _history = messages[1:] # skip the first element as it's the system setup message and RAG memories
     _save_history() 
     
     reasoning = f"Could not fetch reasoning"
@@ -126,15 +125,14 @@ def Riko_Response(user_input: str, time_now = None):
     return final_response, reasoning
 
 
-# === Handle context overflow ===
+# handle context overflow
 _MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
 _SYSTEM_INSTRUCTIONS_TOKENS = get_llm_token_length(_SYSTEM_INSTRUCTIONS)
 def handle_rolling_window():
-    """When context window is full, archive old messages into long-term memory."""
-
-    if not _history:
-        print("[INFO] No history to manage.")
-        return
+    """
+    When context window is full, archive old messages into long-term memory.
+    This function does NOT save the history internally
+    """
     
     token_count = _SYSTEM_INSTRUCTIONS_TOKENS
     for msg in _history:
@@ -145,8 +143,8 @@ def handle_rolling_window():
     if token_count <= _MAX_HISTORY_TOKENS:
         return
     
-    while token_count >= _MAX_HISTORY_TOKENS or _history[0]["role"] != "user":
-        # Pop oldest non-system message
+    while _history and (token_count >= _MAX_HISTORY_TOKENS or _history[0]["role"] != "user"):
+        # dequeue oldest non-system message
         dropped_message = _history.pop(0)
         token_count -= dropped_message["tokens"]
 
@@ -155,9 +153,14 @@ def handle_rolling_window():
 
         message_tokens = dropped_message["tokens"]
         message = dropped_message["content"][0]["text"]
-        message_time, _, message_text = message.partition("]")
-        
-        message_time, message_text = message_time[1:], message_text.strip()
+
+        if message.startswith("[") and "]" in message:
+            message_time, _, message_text = message.partition("]")
+            message_time = message_time[1:]
+        else:
+            # fallback: use current time or log a warning
+            message_time = datetime.now().isoformat(timespec="minutes")
+            message_text = message
 
         # ensure every message has a valid timestamp
         try:
@@ -167,8 +170,7 @@ def handle_rolling_window():
 
         add_message_to_memory(message_text, message_time, message_tokens, _history)
 
-    print(f"[INFO] Context window managed. Updated history saved. final history token count: {token_count}")
-    _save_history()
+    print(f"[INFO] Context window managed. Token count: {token_count}")
 
 
 _client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])

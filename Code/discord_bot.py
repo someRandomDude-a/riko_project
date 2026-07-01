@@ -8,12 +8,12 @@ from queue import Queue
 import asyncio
 
 from process.llm_scripts.MCP_Tools import pdf_processor
-from process.llm_scripts.module import Riko_Response
+from process.llm_scripts.module import llm_response
 
 # Config:
 time_offset = datetime.now().astimezone().utcoffset()
 load_dotenv()
-_TOKEN = os.getenv("Discord_bot_token").strip()
+_TOKEN = os.getenv("Discord_bot_token", "").strip()
 _channel_whitelist = [
     int(ch.strip())
     for ch in os.getenv("Discord_Channel_whitelist", "").split(",")
@@ -33,7 +33,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ---------------------------------------------
-llm_response_queue = Queue(3) #The message queue
+llm_response_queue = Queue(3) # The message queue
 discord_loop = None
 
 def worker():
@@ -65,7 +65,7 @@ def worker():
         try:
             timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='minutes')
             
-            response, _ = Riko_Response(user_text, timestamp)
+            response, _ = llm_response(user_text, message.author.display_name, timestamp)
             
         except Exception as e:
             response = f"⚠️ Error: {e}"
@@ -137,13 +137,12 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    #process_message(message)
-        # Ignore messages from the bot itself
+    # ignore messages from the bot itself
     if message.author == bot.user:
         return
     print(f"{message.channel.id}\t{message.author.name}\t{message.content}") 
 
-   # Only respond in the target channel
+   # only respond in the target channel
     if message.channel.id  in _channel_whitelist:
         
         if message.content[0] == '!':
@@ -157,6 +156,6 @@ async def on_message(message):
             llm_response_queue.put(message)
             await message.add_reaction("⏳")
             return
-    # Keep commands working
+    # keep commands working
 
 bot.run(_TOKEN)
