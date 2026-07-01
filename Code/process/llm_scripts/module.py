@@ -4,12 +4,13 @@ import pathlib
 import os
 import tempfile
 
-from process.llm_scripts.Memory_system.long_term_memory import get_RAG_context, add_message_to_memory 
+from process.llm_scripts.Memory_system.long_term_memory import get_RAG_context, add_message_to_memory
+from process.llm_scripts.MCP_Tools import MCP_PROMPT
 from process.llm_scripts.utils import get_llm_token_length, call_llm_api
 from process.common.config import char_config
 
 
-# Load and Save Chat History ===
+# Load and Save Chat History
 _HISTORY_FILE = pathlib.Path(char_config['history_file']).absolute()
 _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
 
@@ -42,7 +43,8 @@ def _save_history():
 
 
 
-_SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
+_SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']
+_SYSTEM_PROMPT = _SYSTEM_INSTRUCTIONS + MCP_PROMPT
 _ASSISTANT_NAME = char_config['presets']['default']['name']
 def llm_response(user_message: str, user_name: str, time_now: str | None = None) -> tuple[str, str]:
     """

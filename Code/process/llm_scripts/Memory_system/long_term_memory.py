@@ -171,8 +171,7 @@ def cleanup_memory_store():
 
 
 
-_HEADER_TEXT = """### Relevant Memories
-These are past interactions that may be relevant.
+_HEADER_TEXT = """### Relevant Memories. These are past interactions that may be relevant.
 """
 _MAX_MEMORY_TOKENS = char_config['RAG_params']['max_token_budget']
 _HEADER_TOKENS = get_llm_token_length(_HEADER_TEXT)
