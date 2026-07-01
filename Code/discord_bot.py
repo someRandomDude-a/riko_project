@@ -7,10 +7,10 @@ import threading
 from queue import Queue
 import asyncio
 
-from process.llm_scripts.MCP_Tools import pdf_processor
+from process.llm_scripts.MCP_Tools import call_tool
 from process.llm_scripts.module import llm_response
 
-# Config:
+# Config
 time_offset = datetime.now().astimezone().utcoffset()
 load_dotenv()
 _TOKEN = os.getenv("Discord_bot_token", "").strip()
@@ -41,6 +41,8 @@ def worker():
         Worker thread to process LLM responses sequentialy.
         To use, put messages in llm_response_queue.
     """
+    if discord_loop is None:
+        raise ValueError("variable `discord_loop` was not assigned correctly")
     while True:
         message = llm_response_queue.get()        
 
@@ -54,14 +56,15 @@ def worker():
                         attachment.read(),
                         discord_loop
                     ).result()
-                    pdf_text = pdf_processor.pdf_text_extract(pdf_byte)
-                    pdf_text = pdf_text[:100000] #limit max size
-                    user_text += f"\n\n[PDF CONTENT START]\n{pdf_text}\n[PDF CONTENT END]\n"
+                    pdf_text = call_tool("pdf_extractor", file_bytes=pdf_byte)
+                    user_text += ("\n" + pdf_text)
                     
                 except Exception as e:
                     user_text += f"\n\nFailed to process PDF: {e}"
             
         print(f"Received: {user_text}")
+        
+        response = None
         try:
             timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='minutes')
             

@@ -1,18 +1,16 @@
 import json
-from openai import OpenAI
 from datetime import datetime
 import pathlib
 import os
 import tempfile
 
 from process.llm_scripts.Memory_system.long_term_memory import get_RAG_context, add_message_to_memory 
-from process.llm_scripts.utils import get_llm_token_length
+from process.llm_scripts.utils import get_llm_token_length, call_llm_api
 from process.common.config import char_config
 
 
 # Load and Save Chat History ===
-_HISTORY_FILE = char_config['history_file']
-_HISTORY_FILE = pathlib.Path(_HISTORY_FILE).resolve()
+_HISTORY_FILE = pathlib.Path(char_config['history_file']).absolute()
 _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 def _load_history() -> list[dict]:
@@ -46,7 +44,7 @@ def _save_history():
 
 _SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']  
 _ASSISTANT_NAME = char_config['presets']['default']['name']
-def llm_response(user_message: str, user_name: str, time_now: str | None = None):
+def llm_response(user_message: str, user_name: str, time_now: str | None = None) -> tuple[str, str]:
     """
     Handles user input, manages context, queries memory, and returns model output.
     Must always include a speaker name in format:
@@ -83,7 +81,7 @@ def llm_response(user_message: str, user_name: str, time_now: str | None = None)
         ],
         "tokens": get_llm_token_length(f'[{time_now}] {user_name}: {user_message}')
     })
-    response = _call_llm_api(messages)
+    response = call_llm_api(messages)
 
 
     response_text = response.output_text.strip()
@@ -171,26 +169,3 @@ def handle_rolling_window():
         add_message_to_memory(message_text, message_time, message_tokens, _history)
 
     print(f"[INFO] Context window managed. Token count: {token_count}")
-
-
-_client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])
-_MODEL = char_config['model']
-_MAX_OUTPUT_TOKENS = char_config['presets']['default']['model_params']['max_output_tokens']
-_TEMPERATURE = char_config['presets']['default']['model_params']['temperature']
-def _call_llm_api(messages):
-    """Core LLM Call"""
-    response = _client.responses.create(
-        model=_MODEL,
-        input=messages,
-        max_output_tokens= _MAX_OUTPUT_TOKENS,
-        temperature=_TEMPERATURE,
-        stream=False,
-        text={
-            "format": {
-            "type": "text"
-            }
-        },
-        store=False,
-    )
-    return response
-

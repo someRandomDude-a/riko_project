@@ -10,8 +10,9 @@ import tempfile
 import os
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import uuid
+import re
 
-from process.llm_scripts.utils import get_llm_token_length
+from process.llm_scripts.utils import get_llm_token_length, call_llm_api
 from process.common.config import char_config
 
 _DEBUG = True
@@ -86,8 +87,8 @@ def _create_faiss_cpu_index():
     _debug_out(f"Created HNSWFlat FAISS index (dim={_EMBEDDING_DIM}, M={M})")
     return index
 
-_FAISS_INDEX_PATH = './persistant_memories/faiss_index.index' # File path for FAISS index
-_FAISS_INDEX_PATH = pathlib.Path(_FAISS_INDEX_PATH).resolve()
+_FAISS_INDEX_PATH = pathlib.Path('./persistant_memories/faiss_index.index').absolute()
+_FAISS_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
 def _save_faiss_index():
     """Save FAISS index to disk"""
     faiss.write_index(_faiss_index, _FAISS_INDEX_PATH.as_posix())
@@ -133,7 +134,7 @@ def _add_entire_memory_store():
 
     ids = np.array(ids, dtype=np.int64)
     embeddings = _get_embedding(texts)
-    _faiss_index.add_with_ids(embeddings, ids)
+    _faiss_index.add_with_ids(embeddings, ids) # type: ignore
     
     if memory_changed:
         _save_memory_store()
@@ -230,7 +231,7 @@ _TOP_K = char_config['RAG_params']['max_memories']
 def _query_faiss_cpu(text):
     """query FAISS-CPU for relevant memories"""
     query_embedding = _get_embedding(text)
-    similarity, indices = _faiss_index.search(query_embedding, _TOP_K)  # Get top-k indices and distances
+    similarity, indices = _faiss_index.search(query_embedding, _TOP_K)  # Get top-k indices and distances # type: ignore
     return indices, similarity
 
 _AGE_DIV_FACTOR = 60 * 60 * 24
@@ -277,7 +278,7 @@ def add_message_to_memory(message_text : str, message_time : str, message_tokens
 
     # Skip duplicates
     embedding = _get_embedding(message_text)
-    D, I = _faiss_index.search(embedding, 1)
+    D, I = _faiss_index.search(embedding, 1) # type: ignore
     if D[0][0] > 0.8:  # Threshold depends on embedding space
         _debug_out("Duplicate detected via embedding similarity.")
         return
@@ -298,35 +299,73 @@ def add_message_to_memory(message_text : str, message_time : str, message_tokens
     _memory_store.append(new_memory)
     
     embedding = _get_embedding(memory_text)
-    _faiss_index.add_with_ids(embedding, np.array([new_memory['id']], dtype=np.int64))
+    _faiss_index.add_with_ids(embedding, np.array([new_memory['id']], dtype=np.int64)) # type: ignore
 
     _save_memory_store()
     _save_faiss_index()
 
+# Unused for now, will be used after migration to llama.cpp
 _REFLECTION_MODEL_ID = char_config["Self_reflection_params"]["model_id"]
 _MAX_REFLECTION_INPUT = char_config["Self_reflection_params"]["context_limit"]
 _MAX_REFLECTION_OUTPUT = char_config["Self_reflection_params"]["token_limit"]
-def _self_reflection(message: str, context) -> str:
+def _self_reflection(message: str, context: list) -> str:
     """
     Generate a detailed first-person reflection for a message given the current context.
-    - message: str, the latest user message
-    - context: list, previous messages in rolling context
+    - message: str, the latest user message (already stripped of timestamp)
+    - context: list, previous messages in rolling context (each is a dict with "role" and "content")
     Returns: str, detailed self-reflection
     """
-    return message
+    # Extract text from context messages and strip timestamps
+    raw_texts = []
+    for msg in context:
+        # Each message dict has "content" as a list of content blocks
+        # We assume the first block is text
+        content_text = msg["content"][0]["text"]
+        # Remove leading timestamp if present
+        cleaned = re.sub(r'^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}\]\s*', '', content_text)
+        raw_texts.append(cleaned)
+    context_text = "\n".join(raw_texts)
+
+    # Build the prompt for reflection
     prompt = (
         "Instruction: Write a detailed, first-person reflection summarizing this new message. "
         "Include explicit facts, nuances, and relationships for future memory retrieval. "
-        "Focus on the user's text first, but include relevant context as necessary. "
+        "Focus on the user's text first, but include relevant context as necessary.\n\n"
         f"Current context (older messages):\n{context_text}\n\n"
         f"New message (latest):\n{message}\n\n"
+        "Reflection:"
     )
-    return self_reflection
+
+    # Build the messages object for the LLM API
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "You are a helpful assistant that generates concise, first-person reflections for memory storage."
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": prompt
+                }
+            ]
+        }
+    ]
+
+    # Call the LLM with the reflection‑specific token limit
+    response = call_llm_api(messages)
+    reflection = response.output_text.strip()
+    return reflection
 
 # ================ Memory Store Functions ===================
 
-_MEMORY_STORE_PATH = './persistant_memories/memory_store.json'
-_MEMORY_STORE_PATH = pathlib.Path(_MEMORY_STORE_PATH).resolve()
+_MEMORY_STORE_PATH = pathlib.Path('./persistant_memories/memory_store.json').absolute()
 _MEMORY_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 def _load_memory_store():
@@ -350,7 +389,7 @@ def _load_memory_store():
                     _save_faiss_index()
 
             except (json.JSONDecodeError, ValueError) as e:
-                _debug_out("[WARN] Memory store file is empty or corrupted", e)
+                _debug_out(f"[WARN] Memory store file is empty or corrupted: {e}")
                 _memory_store = []
 
     
@@ -427,7 +466,7 @@ if _faiss_index.ntotal == 0:
 # Test script
 def test_script():
     migrate_memories()
-    cleanup_memory_store()
+#    cleanup_memory_store()
     
     prompt = "Tell me more about yourself?"
     memories = get_RAG_context(prompt)

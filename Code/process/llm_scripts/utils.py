@@ -1,7 +1,8 @@
 from transformers import AutoTokenizer
 from process.common.config import char_config
 from typing import overload
-
+from openai import OpenAI
+from openai.types.responses import Response
 tokenizer = AutoTokenizer.from_pretrained(char_config['tokenizer_model'])
 
 @overload
@@ -17,3 +18,23 @@ def get_llm_token_length(text: str | list[str]) -> int | list[int]:
         return lengths[0]
     return lengths
 
+_client = OpenAI(api_key=char_config['api_key'], base_url=char_config['base_url'])
+_MODEL = char_config['model']
+_MAX_OUTPUT_TOKENS = char_config['presets']['default']['model_params']['max_output_tokens']
+_TEMPERATURE = char_config['presets']['default']['model_params']['temperature']
+def call_llm_api(messages) -> Response:
+    """Core LLM Call"""
+    response = _client.responses.create(
+        model=_MODEL,
+        input=messages,
+        max_output_tokens= _MAX_OUTPUT_TOKENS,
+        temperature=_TEMPERATURE,
+        stream=False,
+        text={
+            "format": {
+            "type": "text"
+            }
+        },
+        store=False,
+    )
+    return response
