@@ -43,8 +43,7 @@ def _save_history():
 
 
 
-_SYSTEM_INSTRUCTIONS = char_config['presets']['default']['system_prompt']
-_SYSTEM_PROMPT = _SYSTEM_INSTRUCTIONS + MCP_PROMPT
+_SYSTEM_PROMPT =  char_config['presets']['default']['system_prompt'] + MCP_PROMPT
 _ASSISTANT_NAME = char_config['presets']['default']['name']
 def llm_response(user_message: str, user_name: str, time_now: str | None = None) -> tuple[str, str]:
     """

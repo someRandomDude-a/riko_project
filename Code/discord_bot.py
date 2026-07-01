@@ -36,6 +36,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 llm_response_queue = Queue(3) # The message queue
 discord_loop = None
 
+RESOURCE_DISPATCH = {
+    "application/pdf": "pdf_extractor",
+}
+
 def worker():
     """
         Worker thread to process LLM responses sequentialy.
@@ -48,17 +52,20 @@ def worker():
 
         # handle attachments
         for attachment in message.attachments:
-            if attachment.content_type == "application/pdf":
-                try:
-                    pdf_byte = asyncio.run_coroutine_threadsafe(
-                        attachment.read(),
-                        discord_loop
-                    ).result()
-                    pdf_text = call_tool("pdf_extractor", file_bytes=pdf_byte)
-                    user_text += ("\n" + pdf_text)
-                    
-                except Exception as e:
-                    user_text += f"\n\nFailed to process PDF: {e}"
+            tool_name = RESOURCE_DISPATCH.get(attachment.content_type or "")
+            if not tool_name:
+                continue
+
+            file_bytes = asyncio.run_coroutine_threadsafe(
+                attachment.read(),
+                discord_loop
+            ).result()
+
+            try:
+                result = call_tool(tool_name, file_bytes=file_bytes)
+                user_text += "\n" + result
+            except Exception as e:
+                user_text += f"\n\n[{tool_name} failed: {e}]"
             
         print(f"Received: {user_text}")
         
@@ -146,7 +153,7 @@ async def on_message(message):
    # only respond in the target channel
     if message.channel.id  in _channel_whitelist:
         
-        if message.content[0] == '!':
+        if message.content and message.content[0] == '!':
             await bot.process_commands(message)
             return
         
