@@ -5,8 +5,6 @@ from openai import OpenAI
 from openai.types.responses import Response
 tokenizer = AutoTokenizer.from_pretrained(char_config['tokenizer_model'])
 
-from llm_scripts.MCP_Tools import get_openai_function_definitions
-
 @overload
 def get_llm_token_length(text: str) -> int: ...
 

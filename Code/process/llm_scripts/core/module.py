@@ -6,7 +6,7 @@ import tempfile
 
 from process.llm_scripts.Memory_system.long_term_memory import get_RAG_context, add_message_to_memory
 from process.llm_scripts.MCP_Tools import MCP_PROMPT
-from process.llm_scripts.utils import get_llm_token_length, call_llm_api
+from .utils import get_llm_token_length, call_llm_api
 from process.common.config import char_config
 
 
@@ -55,7 +55,7 @@ def llm_response(user_message: str, user_name: str, time_now: str | None = None)
         time_now = datetime.now().isoformat(timespec='minutes')
 
     global _history
-    handle_rolling_window()
+    _handle_rolling_window()
     memory_text = get_RAG_context(user_message)
     header = """
 ### Conversation History
@@ -127,7 +127,7 @@ def llm_response(user_message: str, user_name: str, time_now: str | None = None)
 # handle context overflow
 _MAX_HISTORY_TOKENS = char_config['presets']['default']['model_params']['context_window_token_limit']
 _SYSTEM_INSTRUCTIONS_TOKENS = get_llm_token_length(_SYSTEM_PROMPT)
-def handle_rolling_window():
+def _handle_rolling_window():
     """
     When context window is full, archive old messages into long-term memory.
     This function does NOT save the history internally

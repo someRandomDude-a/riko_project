@@ -1,169 +1,261 @@
-from discord.ext import commands
-import discord
-import os
-from dotenv import load_dotenv
-from datetime import datetime
-import threading
-from queue import Queue
 import asyncio
+import logging
+import os
+from datetime import datetime
+from typing import Dict
+
+import discord
+from discord.ext import commands
+from dotenv import load_dotenv
 
 from process.llm_scripts.MCP_Tools import call_tool
-from process.llm_scripts.module import llm_response
+from process.llm_scripts.core import llm_response
 
-# Config
-time_offset = datetime.now().astimezone().utcoffset()
+# Logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# Environment variables
 load_dotenv()
-_TOKEN = os.getenv("Discord_bot_token", "").strip()
-_channel_whitelist = [
-    int(ch.strip())
-    for ch in os.getenv("Discord_Channel_whitelist", "").split(",")
+
+TOKEN = os.getenv("Discord_bot_token", "").strip()
+if not TOKEN:
+    logger.critical("Discord_bot_token not set in environment.")
+    raise ValueError("Discord_bot_token is required")
+
+WHITELIST_CHANNELS = [
+    int(ch.strip()) for ch in os.getenv("Discord_Channel_whitelist", "").split(",")
     if ch.strip()
 ]
-
-_admins = [
-    str(ch.strip())
-    for ch in os.getenv("Discord_admins", "").split(",")
-    if ch.strip()
+ADMIN_IDS = [
+    int(id.strip()) for id in os.getenv("Discord_admins", "").split(",")
+    if id.strip()
 ]
+if not ADMIN_IDS:
+    logger.warning("No admin IDs configured. Admin commands will be unavailable.")
 
-
+# Discord Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ---------------------------------------------
-llm_response_queue = Queue(3) # The message queue
-discord_loop = None
+# Queue for incoming messages – maxsize prevents memory overload
+message_queue: asyncio.Queue[discord.Message] = asyncio.Queue(maxsize=3)
 
-RESOURCE_DISPATCH = {
+# Map content types to tool names
+RESOURCE_DISPATCH: Dict[str, str] = {
     "application/pdf": "pdf_extractor",
 }
 
-def worker():
-    """
-        Worker thread to process LLM responses sequentialy.
-        To use, put messages in llm_response_queue.
-    """
+# Background queue processor
+async def process_queue() -> None:
+    """Background task that processes messages from the queue one by one."""
     while True:
-        message = llm_response_queue.get()        
-
-        user_text = f"{message.author.display_name}: {message.content}"
-
-        # handle attachments
-        for attachment in message.attachments:
-            tool_name = RESOURCE_DISPATCH.get(attachment.content_type or "")
-            if not tool_name:
-                continue
-
-            file_bytes = asyncio.run_coroutine_threadsafe(
-                attachment.read(),
-                discord_loop
-            ).result()
-
-            try:
-                result = call_tool(tool_name, file_bytes=file_bytes)
-                user_text += "\n" + result
-            except Exception as e:
-                user_text += f"\n\n[{tool_name} failed: {e}]"
-            
-        print(f"Received: {user_text}")
-        
-        response = None
+        message = await message_queue.get()
         try:
-            timestamp = (message.created_at + time_offset ).replace(tzinfo=None).isoformat(timespec='minutes')
-            
-            response, _ = llm_response(user_text, message.author.display_name, timestamp)
-            
+            await handle_message(message)
         except Exception as e:
-            response = f"⚠️ Error: {e}"
+            logger.exception(f"Error processing message from {message.author}: {e}")
         finally:
-            asyncio.run_coroutine_threadsafe(
-                message.reply(response),
-                discord_loop
-            )
-            llm_response_queue.task_done()        
+            message_queue.task_done()
 
-threading.Thread(target=worker, daemon=True).start()
+async def handle_message(message: discord.Message) -> None:
+    # Basic context
+    user_text = f"{message.author.display_name}: {message.content}"
 
+    # Process attachments (read asynchronously, then call tool in executor)
+    for attachment in message.attachments:
+        tool_name = RESOURCE_DISPATCH.get(attachment.content_type or "")
+        if not tool_name:
+            continue
 
-@bot.command()
-async def leave(ctx):
-    """Leave the server if you are the owner and give the leave command"""
-    if ctx.author.name in _admins:
-        await ctx.leave_server(ctx.server)
-    else:
+        # Read attachment bytes
+        file_bytes = await attachment.read()
+
+        # Call the potentially blocking tool in a thread
+        try:
+            result = await asyncio.to_thread(call_tool, tool_name, file_bytes=file_bytes)
+            user_text += f"\n{result}"
+        except Exception as e:
+            user_text += f"\n\n[{tool_name} failed: {e}]"
+            logger.error(f"Tool {tool_name} failed for {message.author}: {e}")
+
+    logger.info(f"Processing message from {message.author}: {user_text[:100]}...")
+
+    # Convert message timestamp to local timezone and format
+    timestamp = (
+        message.created_at.astimezone()
+        .replace(tzinfo=None)
+        .isoformat(timespec="minutes")
+    )
+
+    # Call the LLM in a thread
+    try:
+        response, _ = await asyncio.to_thread(
+            llm_response,
+            user_text,
+            message.author.display_name,
+            timestamp
+        )
+    except Exception as e:
+        response = f"⚠️ Error: {e}"
+        logger.error(f"LLM call failed for {message.author}: {e}")
+
+    # Reply to the original message
+    try:
+        await message.reply(response)
+    except discord.HTTPException as e:
+        logger.error(f"Failed to reply to {message.author}: {e}")
+
+# Commands
+@bot.command(name="leave")
+async def leave_guild(ctx: commands.Context) -> None:
+    """Make the bot leave the current guild (server). Only admins can use this."""
+    if ctx.author.id not in ADMIN_IDS:
         await ctx.send("❌ You don't have permission to make the bot leave.")
-    
-@bot.command()
-async def clear_history(ctx):
-    if not ctx.channel.id in _channel_whitelist:
         return
-    if not ctx.author.name in _admins or ctx.author == bot.user:
-        await ctx.send("❌ You don't have permission to clear the chat history.")
+
+    if not ctx.guild:
+        await ctx.send("❌ This command must be used in a server.")
         return
-    """Clears upto 100 messages in the channel"""
 
-    await ctx.channel.purge(limit=10000)
- 
-    await ctx.send("✅ Chat history cleared.")
+    guild_name = ctx.guild.name
+    try:
+        await ctx.guild.leave()
+        logger.info(f"Left guild '{guild_name}' on request of {ctx.author}")
+    except Exception as e:
+        logger.error(f"Failed to leave guild {guild_name}: {e}")
+        await ctx.send(f"❌ Failed to leave: {e}")
 
-@bot.command()
-async def cleardm(ctx, amount: int = 100):
+@bot.command(name="clear_history")
+async def clear_history(ctx: commands.Context) -> None:
     """
-    Deletes the last X messages sent by the bot in this DM. 
-    Usage: !cleardm 10
+    Purge up to 10,000 messages in the current channel.
+    Only works in whitelisted channels and for admins.
     """
+    # Check permissions
+    if ctx.author.id not in ADMIN_IDS:
+        await ctx.send("❌ You don't have permission to clear chat history.")
+        return
+    if ctx.channel.id not in WHITELIST_CHANNELS:
+        await ctx.send("❌ This channel is not whitelisted for history clearing.")
+        return
 
-    # Ensure it's a DM
+    # Confirm action
+    confirm_msg = await ctx.send(
+        "⚠️ This will delete up to 10,000 messages. Continue? (reply with `yes`)"
+    )
+    try:
+        reply = await bot.wait_for(
+            "message",
+            check=lambda m: m.author == ctx.author and m.channel == ctx.channel,
+            timeout=30.0
+        )
+        if reply.content.lower() != "yes":
+            await ctx.send("❌ Cancelled.")
+            return
+    except asyncio.TimeoutError:
+        await ctx.send("❌ Timed out. Cancelled.")
+        return
+
+    # Purge in chunks to avoid rate limits
+    deleted = 0
+    chunk_size = 100
+    total_limit = 10000
+
+    async for message in ctx.channel.history(limit=total_limit):
+        try:
+            await message.delete()
+            deleted += 1
+            if deleted % chunk_size == 0:
+                await asyncio.sleep(1)  # pace deletions
+        except discord.HTTPException as e:
+            logger.warning(f"Could not delete message {message.id}: {e}")
+            # Continue with next messages
+
+    await ctx.send(f"✅ Deleted {deleted} messages.")
+
+@bot.command(name="cleardm")
+async def clear_dm(ctx: commands.Context, amount: int = 100) -> None:
+    """
+    Delete the last X messages sent by the bot in this DM.
+    Only works in direct messages.
+    """
     if not isinstance(ctx.channel, discord.DMChannel):
         await ctx.send("❌ This command only works in DMs.")
         return
 
-    deleted = 0
+    if amount <= 0:
+        await ctx.send("❌ Amount must be positive.")
+        return
 
-    async for message in ctx.channel.history(limit=200):
+    deleted = 0
+    limit = min(amount, 200)  # Discord history limit per fetch
+    async for message in ctx.channel.history(limit=limit):
         if message.author == bot.user:
             try:
                 await message.delete()
                 deleted += 1
-                await asyncio.sleep(0.6)  # Prevent rate limits
-            except:
-                pass
-
+                await asyncio.sleep(0.2)  # conservative rate limit
+            except discord.HTTPException as e:
+                logger.warning(f"Could not delete DM message {message.id}: {e}")
             if deleted >= amount:
                 break
 
     await ctx.send(f"✅ Deleted {deleted} of my messages.")
 
+# Event handlers
+@bot.event
+async def on_ready() -> None:
+    """Called when the bot is connected and ready."""
+    logger.info(f"✅ Logged in as {bot.user} (ID: {bot.user.id})") #type: ignore
+    # Start the queue processor as a background task
+    bot.loop.create_task(process_queue())
+    logger.info("Queue processor started.")
 
 @bot.event
-async def on_ready():
-    global discord_loop
-    discord_loop = asyncio.get_running_loop()
-    print(f"✅ Logged in as {bot.user}")
-
-@bot.event
-async def on_message(message):
-    # ignore messages from the bot itself
+async def on_message(message: discord.Message) -> None:
+    """
+    Main message handler:
+      - Ignore bot's own messages.
+      - Always process commands via bot.process_commands().
+      - For whitelisted channels, queue non‑command messages for LLM processing.
+    """
     if message.author == bot.user:
         return
-    print(f"{message.channel.id}\t{message.author.name}\t{message.content}") 
 
-   # only respond in the target channel
-    if message.channel.id  in _channel_whitelist:
-        
-        if message.content and message.content[0] == '!':
-            await bot.process_commands(message)
-            return
-        
-        else:
-            if llm_response_queue.qsize() >= llm_response_queue.maxsize:
-                await message.add_reaction("❌")
-                await message.reply("My input buffer is full, please wait until I finish with my queued responses!")
-            llm_response_queue.put(message)
-            await message.add_reaction("⏳")
-            return
-    # keep commands working
+    await bot.process_commands(message)
 
-bot.run(_TOKEN)
+    # If the message is a command don't queue.
+    if message.content.startswith("!"):
+        return
+
+    # Only queue messages from whitelisted channels
+    if WHITELIST_CHANNELS and message.channel.id not in WHITELIST_CHANNELS:
+        return
+
+    # Try to put the message into the queue
+    try:
+        message_queue.put_nowait(message)
+        await message.add_reaction("⏳")
+        logger.debug(f"Queued message from {message.author} in #{message.channel}")
+    except asyncio.QueueFull:
+        await message.add_reaction("❌")
+        await message.reply(
+            "My input buffer is full. Please wait until I finish my queued responses!"
+        )
+        logger.warning(f"Queue full - rejected message from {message.author}")
+
+if __name__ == "__main__":
+    try:
+        bot.run(TOKEN)
+    except discord.LoginFailure:
+        logger.critical("Invalid bot token. Exiting.")
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user.")
+    finally:
+        # Cancel any remaining tasks
+        asyncio.run(bot.close())

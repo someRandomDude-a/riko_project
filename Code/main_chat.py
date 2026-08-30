@@ -1,5 +1,5 @@
 from process.voice_scripts.speech_recognition import monitor_and_transcribe
-from process.llm_scripts.module import llm_response
+from process.llm_scripts.core import llm_response
 from process.voice_scripts.voice_generator import stream
 from process.common.config import char_config
 

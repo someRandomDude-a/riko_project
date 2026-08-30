@@ -12,7 +12,7 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import uuid
 import re
 
-from process.llm_scripts.utils import get_llm_token_length, call_llm_api
+from process.llm_scripts.core import get_llm_token_length, call_llm_api
 from process.common.config import char_config
 
 _DEBUG = True
@@ -307,6 +307,7 @@ def add_message_to_memory(message_text : str, message_time : str, message_tokens
 _REFLECTION_MODEL_ID = char_config["Self_reflection_params"]["model_id"]
 _MAX_REFLECTION_INPUT = char_config["Self_reflection_params"]["context_limit"]
 _MAX_REFLECTION_OUTPUT = char_config["Self_reflection_params"]["token_limit"]
+_REFLECTION = char_config["Self_reflection_params"]["enable"]
 def _self_reflection(message: str, context: list) -> str:
     """
     Generate a detailed first-person reflection for a message given the current context.
@@ -314,6 +315,9 @@ def _self_reflection(message: str, context: list) -> str:
     - context: list, previous messages in rolling context (each is a dict with "role" and "content")
     Returns: str, detailed self-reflection
     """
+    if not _REFLECTION:
+        return message
+
     # Extract text from context messages and strip timestamps
     raw_texts = []
     for msg in context:
