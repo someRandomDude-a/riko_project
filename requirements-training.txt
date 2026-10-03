@@ -1,0 +1,9 @@
+# Optional QLoRA/SFT and continued-pretraining dependencies.
+torch
+transformers
+datasets
+peft
+accelerate
+trl
+bitsandbytes
+sentencepiece
