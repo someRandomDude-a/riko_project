@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "example": {
+      "command": "python",
+      "args": ["path/to/mcp_server.py"],
+      "env": {}
+    },
+    "remote-example": {
+      "url": "http://127.0.0.1:8000/mcp",
+      "headers": {}
+    }
+  }
+}

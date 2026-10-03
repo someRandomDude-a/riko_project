@@ -1,0 +1,76 @@
+/* A single microphone island grows into the compact chat's bottom controls. */
+.app-shell{backdrop-filter:blur(var(--glass-blur)) saturate(125%);}
+.glass-dock{position:relative;isolation:isolate;width:224px;max-width:100%;margin:12px auto 0;padding:12px 12px 0;border:1px solid color-mix(in srgb,var(--text) 12%,transparent);border-radius:38px;background:color-mix(in srgb,var(--panel) calc(var(--glass-alpha)*80%),transparent);backdrop-filter:blur(var(--glass-blur)) saturate(120%);box-shadow:inset 0 1px 0 #ffffff12,0 8px 28px #00000018;color:var(--text);}
+.glass-dock .dock-buttons{align-items:center;justify-content:center;gap:16px;}
+.glass-dock .dock-buttons button{border:1px solid color-mix(in srgb,var(--text) 9%,transparent);background:color-mix(in srgb,var(--text) 5%,transparent);color:var(--text);border-radius:50%;padding:0;flex-shrink:0;}
+.glass-dock .dock-buttons .dock-side{width:40px;height:40px;color:var(--muted);}
+.dock-audio{position:relative;-webkit-app-region:no-drag;}
+.dock-volume-panel{position:absolute;bottom:calc(100% + 10px);left:-8px;width:190px;padding:10px 12px;display:flex;align-items:center;gap:10px;z-index:30;border:1px solid var(--line);border-radius:16px;background:var(--glass-panel);backdrop-filter:blur(var(--glass-blur));box-shadow:0 8px 28px #0004;pointer-events:auto;-webkit-app-region:no-drag;animation:dock-volume-in .18s ease-out;}
+.dock-volume-panel::after{content:'';position:absolute;left:0;right:0;top:100%;height:12px;}
+.dock-volume-panel input{display:block;flex:1;min-width:0;width:100%;margin:0;accent-color:var(--accent);writing-mode:horizontal-tb;-webkit-app-region:no-drag;}
+.dock-volume-panel output{font-size:11px;color:var(--muted);min-width:32px;text-align:right;font-variant-numeric:tabular-nums;}
+@keyframes dock-volume-in{from{opacity:0}to{opacity:1}}
+.glass-dock .dock-buttons .dock-mic{width:64px;height:64px;background:color-mix(in srgb,var(--accent) 10%,transparent);}
+.glass-dock .dock-mic.mic-running{box-shadow:0 0 calc(5px + var(--mic-level)*18px) color-mix(in srgb,var(--accent) 35%,transparent);}
+.glass-dock small{display:block;text-align:center;font-size:10px;color:var(--muted);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.glass-dock .dock-handle{display:flex;width:100%;height:20px;padding:0;border:0;background:transparent!important;border-radius:10px;touch-action:none;cursor:grab;}
+.dock-handle span{width:30px;height:3px;border-radius:4px;background:color-mix(in srgb,var(--text) 30%,transparent);transition:width .18s;}
+.dock-handle:hover span{width:40px;}
+.dock-collapsed{width:104px;padding:10px 8px 0;margin:0;border-radius:38px;}
+.dock-collapsed .dock-handle{width:calc(100% + 16px);margin:10px -8px 0;height:18px;border-radius:0 0 38px 38px;background:color-mix(in srgb,var(--bg) 68%,transparent)!important;cursor:pointer;}
+.dock-collapsed .dock-handle span{width:24px;height:3px;background:#ffffffd9;}
+.dock-collapsed .dock-handle:hover span{width:30px;}
+.glass-dock{--status-color:#858998;--flow-seconds:4s;}
+.status-waiting{--status-color:#79a4d3}.status-awake{--status-color:#74c7aa}.status-listening{--status-color:#72d7b0}.status-processing,.status-generating{--status-color:#b699e6;--spin-speed:.8s}.status-off{--status-color:#858998}
+.glass-dock .dock-mic{position:relative;isolation:isolate;overflow:hidden;box-shadow:inset 0 0 18px color-mix(in srgb,var(--status-color) 30%,transparent)!important;}
+.dock-mic::before{content:'';position:absolute;inset:-20%;z-index:-1;background:conic-gradient(from 0deg,transparent,var(--status-color),transparent,var(--status-color),transparent);opacity:.4;animation:status-ball var(--spin-speed,6s) cubic-bezier(.4,0,.6,1) infinite;}
+.glass-dock.dock-listening{box-shadow:inset 0 0 24px #ab97ed18,0 0 12px #a293e617;}
+.glass-dock.dock-listening::before{inset:0;border:0;padding:5px;z-index:1;opacity:1;background:linear-gradient(0deg,#a6a1ff,#49d7ec,#62dc94,#ffd25b,#ff729c,#a6a1ff) 0 0/50% 200% repeat-y,linear-gradient(0deg,#a6a1ff,#49d7ec,#62dc94,#ffd25b,#ff729c,#a6a1ff) 100% 0/50% 200% repeat-y;animation:waterfall var(--flow-seconds) linear infinite;filter:drop-shadow(0 0 4px #ba9fff);}
+.dock-collapsed{width:88px;padding:10px 12px 0;border-radius:32px;}
+.dock-collapsed .dock-handle{width:64px;margin:8px 0 0;border-radius:0 0 24px 24px;overflow:hidden;}
+.glass-dock small{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden;}
+.mic-only{padding-bottom:10px;margin:8px auto;}
+.mode-compact.app-shell{background:transparent!important;border:0;border-radius:0;backdrop-filter:none;box-shadow:none;}
+.mode-compact .window-chrome{display:none;}
+.mode-compact .app-body,.mode-compact .primary-view,.mode-compact .chat-host,.mode-compact .stream-chat,.mode-compact .chat{pointer-events:none;}
+.mode-compact :is(.msg,.composer,.glass-dock,.scale-grip,.notice,[role=alert]){pointer-events:auto;}
+.mode-compact .chat{scrollbar-width:none;mask-image:linear-gradient(transparent,#000 30px,#000 calc(100% - 12px),transparent);}
+.mode-compact .session-marker,.mode-compact .chat>.message-time{display:none;}
+.mode-compact .msg{background:color-mix(in srgb,var(--panel) 70%,transparent)!important;backdrop-filter:blur(var(--glass-blur));}
+.system-extension{display:block;position:relative;margin:-10px -12px 8px;padding:4px 12px;background:#7e859415;color:var(--muted);font-size:10px;border-radius:12px 12px 0 0;}
+.bubble-time{display:block;text-align:right;font-size:9px;color:var(--muted);margin-top:6px;}
+.conversation-indicators{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap;}
+.discord-launch{font-size:11px;white-space:nowrap;}
+.mini-controls{position:absolute;inset:-24px 0 auto 0;display:flex;justify-content:space-between;pointer-events:auto;}
+.mini-controls button{width:24px;height:24px;padding:3px;border-radius:50%;background:color-mix(in srgb,var(--panel) 65%,transparent)!important;}
+.mode-compact .glass-dock{margin-top:30px;-webkit-app-region:drag;}.glass-dock button{-webkit-app-region:no-drag;}
+.scale-grip{flex-shrink:0;width:58px;height:16px;align-self:center;display:flex;background:#66666690!important;border:0;border-radius:0 0 8px 8px;padding:0;touch-action:none;cursor:ns-resize;}
+.scale-grip span{height:3px;width:24px;border-radius:4px;background:#fff;}
+.board-window .window-chrome{display:none;}.board-window.app-shell{background:transparent!important;backdrop-filter:none;border:0;}.board-window .board-viewport{background:transparent;}
+.board-shell{position:relative;}.board-dock{position:absolute;z-index:10;bottom:12px;left:50%;transform:translateX(-50%);display:flex;flex-wrap:nowrap;max-width:calc(100% - 24px);overflow:auto;border:1px solid var(--line);border-radius:20px;background:var(--glass-panel)!important;backdrop-filter:blur(var(--glass-blur));}
+.board-dock button{white-space:nowrap;}.board-page-picker{position:absolute;z-index:11;bottom:70px;left:12px;right:12px;max-height:60%;overflow:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;padding:14px;background:var(--glass-panel);backdrop-filter:blur(var(--glass-blur));border-radius:18px;}
+.page-preview{display:block;text-align:left;overflow:hidden;}.page-preview>div{height:110px;overflow:hidden;font-size:9px;}.page-preview img{max-height:80px;max-width:100%;}
+.app-shell:not(.mode-compact) .window-chrome{background:transparent!important;border:0;box-shadow:none!important;}.window-brand{display:none;}
+@keyframes waterfall{to{background-position:0 200%,100% 200%}}
+@keyframes status-ball{to{transform:rotate(360deg)}}
+@supports(animation-timeline:view()){
+ .chat .msg{animation:message-card linear both;animation-timeline:view(block);animation-range:entry 0% exit 100%;transform-origin:center;}
+ @keyframes message-card{0%{opacity:0;transform:scale(.78) rotateX(18deg)}18%,80%{opacity:1;transform:scale(1) rotateX(0)}100%{opacity:0;transform:scale(.75) translateY(-12px)}}
+}
+.dock-collapsed small{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);}
+.glass-dock.dock-listening::before{content:'';position:absolute;inset:-2px;border-radius:inherit;pointer-events:none;z-index:-1;border:2px solid transparent;background:conic-gradient(from 0deg,#ef8aaf,#dbbd79,#88ceb4,#88bfe5,#b49ddd,#ef8aaf) border-box;mask:linear-gradient(#fff 0 0) padding-box,linear-gradient(#fff 0 0);mask-composite:exclude;opacity:.8;animation:dock-breathe 2s ease-in-out infinite;}
+.glass-dock.solid-indicator.dock-listening::before{background:var(--dock-ring);}
+.mode-compact .window-chrome{min-height:40px;padding:4px 8px 4px 12px;border:0;background:transparent!important;box-shadow:none!important;backdrop-filter:none!important;}
+.mode-compact .window-brand,.mode-compact .window-controls{display:none;}
+.mode-compact .app-header{justify-content:flex-end;}
+.mode-compact .compact-switch{padding:6px;width:30px;height:30px;border-radius:50%;}
+.mode-compact .stream-chat{padding:0 14px 10px;}
+.mode-compact .conversation-heading{display:none;}
+.mode-compact .composer{margin-top:4px;border-radius:18px;background:color-mix(in srgb,var(--text) 4%,transparent);box-shadow:none;}
+.mode-compact .composer input{font-size:13px;padding:9px;}
+.mode-compact .msg.assistant{background:color-mix(in srgb,var(--text) 4%,transparent);backdrop-filter:none;box-shadow:none;border-color:transparent;}
+.mode-compact .msg.user{background:color-mix(in srgb,var(--accent) 9%,transparent);border-color:transparent;}
+.mode-compact{transform-origin:bottom center;animation:mini-chat-open .24s cubic-bezier(.2,.8,.2,1);}
+@keyframes mini-chat-open{from{opacity:0;transform:scale(.94) translateY(14px)}to{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes dock-breathe{50%{opacity:.4}}
+@media(prefers-reduced-motion:reduce){.mode-compact,.glass-dock.dock-listening::before{animation:none;}}

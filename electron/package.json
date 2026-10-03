@@ -1,0 +1,30 @@
+{
+  "name": "riko-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "node --test src/*.test.mjs",
+    "electron": "electron .",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@pixiv/three-vrm": "^3.5.5",
+    "@pixiv/three-vrm-animation": "^3.5.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "latest",
+    "katex": "^0.18.10",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "three": "^0.186.1",
+    "vite": "^6.4.0",
+    "yaml": "^2.9.1"
+  }
+}

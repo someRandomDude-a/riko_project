@@ -1,0 +1,244 @@
+diff --git a/tools/server/CMakeLists.txt b/tools/server/CMakeLists.txt
+index 70b8d7d..e31531b 100644
+--- a/tools/server/CMakeLists.txt
++++ b/tools/server/CMakeLists.txt
+@@ -67,3 +67,10 @@ install(TARGETS ${TARGET} RUNTIME)
+ 
+ target_link_libraries(${TARGET} PRIVATE llama-server-impl)
+ target_compile_features(${TARGET} PRIVATE cxx_std_17)
++
++if (RIKO_NATIVE_BRIDGE_SOURCE)
++    add_library(riko-native SHARED ${RIKO_NATIVE_BRIDGE_SOURCE})
++    target_include_directories(riko-native PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
++    target_link_libraries(riko-native PRIVATE server-context)
++    target_compile_features(riko-native PRIVATE cxx_std_17)
++endif()
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 809be94..acddc4d 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -27,6 +27,9 @@
+ #include <random>
+ #include <utility>
+ #include <fstream>
++#include <cmath>
++#include <cstring>
++#include <atomic>
+ 
+ // fix problem with std::min and std::max
+ #if defined(_WIN32)
+@@ -230,6 +233,7 @@ struct server_batch {
+ 
+ struct server_slot {
+     int id;
++    std::vector<float> riko_probe_features;
+ 
+     llama_context * ctx_tgt = nullptr;
+     llama_context * ctx_dft = nullptr;
+@@ -363,6 +367,7 @@ struct server_slot {
+ 
+     void reset() {
+         SLT_DBG(*this, "%s", "\n");
++        riko_probe_features.clear();
+ 
+         spec_is_replay = false;
+ 
+@@ -918,6 +923,39 @@ private:
+     // use server_context methods instead
+ 
+     common_params params_base;
++    bool riko_probe_armed = false;
++    std::atomic<int32_t> riko_probe_interval{0};
++    std::vector<float> riko_probe_features;
++
++    static bool riko_probe_eval(ggml_tensor * tensor, bool ask, void * data) {
++        auto * self = static_cast<server_context_impl *>(data);
++        const bool capture = self->riko_probe_armed && std::strcmp(tensor->name, "result_norm") == 0;
++        if (ask) {
++            return capture;
++        }
++        if (!capture || tensor->type != GGML_TYPE_F32 || tensor->ne[0] < 1 || tensor->ne[0] > 65536 ||
++                tensor->ne[1] != 1 || tensor->ne[2] != 1 || tensor->ne[3] != 1 || tensor->nb[0] != sizeof(float)) {
++            return true;
++        }
++        const int width = (int) tensor->ne[0];
++        std::vector<float> row(width);
++        ggml_backend_tensor_get(tensor, row.data(), 0, width * sizeof(float));
++        std::vector<float> features(256);
++        for (int i = 0; i < 256; ++i) {
++            const int first = i * width / 256;
++            const int last = ((i + 1) * width + 255) / 256;
++            double sum = 0;
++            for (int j = first; j < last; ++j) {
++                if (!std::isfinite(row[j])) {
++                    return true;
++                }
++                sum += row[j];
++            }
++            features[i] = (float) (sum / (last - first));
++        }
++        self->riko_probe_features = std::move(features);
++        return true;
++    }
+ 
+     // note: keep these alive - they determine the lifetime of the model, context, etc.
+     common_init_result_ptr llama_init;
+@@ -1145,6 +1183,18 @@ private:
+             params_base.load_progress_callback_user_data = &load_progress_text;
+         }
+ 
++        const char * riko_probe = getenv("RIKO_EMOTION_PROBE");
++        if (riko_probe && std::strcmp(riko_probe, "1") == 0 && riko_probe_interval.load() == 0) {
++            riko_probe_interval.store(32);
++        }
++        if (riko_probe_interval.load() > 0) {
++            if (params_base.cb_eval) {
++                SRV_ERR("%s", "emotion probe cannot share an evaluation callback\n");
++                return false;
++            }
++            params_base.cb_eval = riko_probe_eval;
++            params_base.cb_eval_user_data = this;
++        }
+         llama_init = common_init_from_params(params_base);
+ 
+         model_tgt = llama_init->model();
+@@ -2140,6 +2190,8 @@ private:
+         res->oaicompat_model   = slot.task->params.oaicompat_model;
+         res->oaicompat_cmpl_id = slot.task->params.oaicompat_cmpl_id;
+ 
++        res->riko_probe_features = std::move(slot.riko_probe_features);
++
+         // populate res.probs_output
+         if (slot.task->params.sampling.n_probs > 0) {
+             res->prob_output = tkn; // copy the token probs
+@@ -3875,12 +3927,27 @@ private:
+         // yield to the queue, so we can still handle metrics tasks while decoding
+         // note: the sync is done here too, so that the wait is also covered by the yield
+         int ret = 0;
++        riko_probe_features.clear();
++        riko_probe_armed = false;
++        // Only single-token decode batches have an unambiguous row mapping.
++        if (params_base.cb_eval == riko_probe_eval && batch.view.size() == 1) {
++            const auto & token = batch.tokens[off];
++            const int32_t interval = riko_probe_interval.load();
++            if (token.id_slot == 0 && token.output && !token.is_prompt && !slots[0].can_speculate() &&
++                    slots[0].stats.n_gen > 0 && interval > 0 && slots[0].stats.n_gen % interval == 0) {
++                riko_probe_armed = true;
++            }
++        }
+         queue_tasks.yield_to_queue([&]() {
+             ret = llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch.view.get());
+             if (ret == 0 && has_output) {
+                 llama_synchronize(ctx_tgt);
+             }
+         });
++        riko_probe_armed = false;
++        if (ret == 0 && !riko_probe_features.empty()) {
++            slots[0].riko_probe_features = std::move(riko_probe_features);
++        }
+ 
+         if (ret != 0) {
+             {
+@@ -4406,6 +4473,7 @@ server_context_meta server_context::get_meta() const {
+     const char * ftype_name = llama_ftype_name(llama_model_ftype(impl->model_tgt));
+ 
+     return server_context_meta {
++        impl->riko_probe_interval.load(),
+         /* build_info             */ std::string(llama_build_info()),
+         /* model_name             */ impl->model_name,
+         /* model_aliases          */ impl->model_aliases,
+@@ -4469,6 +4537,13 @@ void server_context::set_state_callback(server_state_callback_t callback) {
+     impl->callback_state = std::move(callback);
+ }
+ 
++void server_context::set_emotion_probe_interval(int32_t interval) {
++    if (interval < 0 || interval > 512) {
++        throw std::runtime_error("emotion probe interval must be between 0 and 512");
++    }
++    impl->riko_probe_interval.store(interval);
++}
++
+ //
+ // server_routes
+ //
+@@ -4850,6 +4925,7 @@ static json get_res_props(const server_context_meta & meta, const common_params
+         { "bos_token",                   meta.bos_token_str },
+         { "eos_token",                   meta.eos_token_str },
+         { "build_info",                  meta.build_info },
++        { "riko_emotion_probe",          meta.emotion_probe_interval > 0 ? "result_norm-pool256-v1" : "disabled" },
+         { "is_sleeping",                 is_sleeping },
+         { "cors_proxy_enabled",          params.ui_mcp_proxy },
+     };
+diff --git a/tools/server/server-context.h b/tools/server/server-context.h
+index c554bb9..8c6e9d7 100644
+--- a/tools/server/server-context.h
++++ b/tools/server/server-context.h
+@@ -14,6 +14,7 @@
+ struct server_context_impl; // private implementation
+ 
+ struct server_context_meta {
++    int32_t emotion_probe_interval;
+     std::string build_info;
+     std::string model_name;
+     std::set<std::string> model_aliases;
+@@ -90,6 +91,7 @@ struct server_context {
+     // load the model and initialize llama_context
+     // returns true on success
+     bool load_model(common_params & params);
++    void set_emotion_probe_interval(int32_t interval);
+ 
+     // this function will block main thread until termination
+     void start_loop();
+diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
+index a5c33c0..5f61e73 100644
+--- a/tools/server/server-task.cpp
++++ b/tools/server/server-task.cpp
+@@ -986,6 +986,9 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
+ // server_task_result_cmpl_partial
+ //
+ void server_task_result_cmpl_partial::update(task_result_state & state) {
++    if (!riko_probe_features.empty() && state.chat_msg.tool_calls.empty()) {
++        riko_probe_prefix_bytes = state.chat_msg.content.size();
++    }
+     is_updated = true;
+     if (is_begin) {
+         return; // begin marker only flushes headers, skip parsing
+@@ -1165,6 +1168,25 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
+ 
+ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
+     std::vector<json> events;
++    bool riko_visible = false;
++    for (const auto & diff : oaicompat_msg_diffs) {
++        riko_visible |= !diff.content_delta.empty();
++        if (!diff.reasoning_content_delta.empty() || !diff.tool_call_delta.name.empty() || !diff.tool_call_delta.arguments.empty()) {
++            riko_visible = false;
++            break;
++        }
++    }
++    if (riko_visible && riko_probe_prefix_bytes > 0 && riko_probe_features.size() == 256) {
++        events.push_back(json {
++            {"event", "riko.emotion_probe.sample"},
++            {"data", json {
++                {"type", "riko.emotion_probe.sample"},
++                {"feature_version", "result_norm-pool256-v1"},
++                {"prefix_bytes", riko_probe_prefix_bytes},
++                {"features", riko_probe_features},
++            }},
++        });
++    }
+ 
+     if (!oai_resp_created) {
+         events.push_back(json {
+diff --git a/tools/server/server-task.h b/tools/server/server-task.h
+index 752595b..d0db6d2 100644
+--- a/tools/server/server-task.h
++++ b/tools/server/server-task.h
+@@ -425,6 +425,8 @@ struct server_task_result_cmpl_final : server_task_result {
+ };
+ 
+ struct server_task_result_cmpl_partial : server_task_result {
++    std::vector<float> riko_probe_features;
++    size_t riko_probe_prefix_bytes = 0;
+     std::string  content;
+     llama_tokens tokens;
+ 
