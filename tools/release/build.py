@@ -22,21 +22,32 @@ def cmake_file_definition(name, path):
     return f'-D{name}:FILEPATH={path.as_posix()}'
 
 
+def apply_patch(checkout, patch):
+    # .patch files may have CRLF in a Windows checkout. Keep the patched native
+    # checkout and patch stream consistently LF, independent of global Git settings.
+    content = patch.read_bytes().replace(b'\r\n', b'\n')
+    for options in (['--check'], []):
+        subprocess.run(['git', 'apply', *options, '-'], input=content, cwd=checkout, check=True)
+
+
 def main():
     checkout = ROOT / '.native/llama.cpp-release'
     if checkout.exists(): raise RuntimeError('Use a clean release workspace; refusing to overwrite a checkout')
     checkout.parent.mkdir(exist_ok=True)
-    run('git', 'clone', 'https://github.com/ggml-org/llama.cpp', checkout)
-    run('git', 'checkout', '--detach', PIN, cwd=checkout)
-    run('git', 'apply', '--check', ROOT / 'tools/llama_cpp/emotion-probe.patch', cwd=checkout)
-    run('git', 'apply', ROOT / 'tools/llama_cpp/emotion-probe.patch', cwd=checkout)
+    run('git', '-c', 'core.autocrlf=false', 'clone', 'https://github.com/ggml-org/llama.cpp', checkout)
+    run('git', '-c', 'core.autocrlf=false', 'checkout', '--detach', PIN, cwd=checkout)
+    apply_patch(checkout, ROOT / 'tools/llama_cpp/emotion-probe.patch')
     for backend in ('cuda', 'vulkan'):
         build = checkout / ('build-' + backend)
-        flags = ['-DBUILD_SHARED_LIBS=ON', '-DGGML_NATIVE=OFF', '-DLLAMA_BUILD_TESTS=OFF',
+        flags = ['-DBUILD_SHARED_LIBS=ON', '-DGGML_NATIVE=OFF', '-DLLAMA_BUILD_TESTS=OFF', '-DLLAMA_OPENSSL=OFF',
             '-DLLAMA_BUILD_EXAMPLES=OFF', '-DLLAMA_BUILD_SERVER=ON',
             cmake_file_definition('RIKO_NATIVE_BRIDGE_SOURCE', ROOT / 'tools/llama_cpp/riko-native.cpp'),
             f'-DGGML_CUDA={"ON" if backend == "cuda" else "OFF"}',
             f'-DGGML_VULKAN={"ON" if backend == "vulkan" else "OFF"}']
+        if backend == 'cuda':
+            # Upstream uses -INFINITY as a max-reduction sentinel. MSVC's
+            # expansion triggers NVCC #221 repeatedly; retain the upstream code.
+            flags += ['-DCMAKE_CUDA_FLAGS=--diag-suppress=221']
         if sys.platform != 'win32': flags += ['-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON', '-DCMAKE_INSTALL_RPATH=$ORIGIN']
         run('cmake', '-S', checkout, '-B', build, *flags)
         run('cmake', '--build', build, '--config', 'Release', '--target', 'riko-native', '-j', '2')

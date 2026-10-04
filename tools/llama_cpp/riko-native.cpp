@@ -6,10 +6,15 @@
 #include "json.h"
 
 #include <atomic>
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <stdexcept>
+#include <vector>
 
 #if defined(_WIN32)
 #define RIKO_EXPORT __declspec(dllexport)
@@ -54,8 +59,10 @@ RIKO_EXPORT void * riko_create(const char * arguments, int interval, char * erro
         for (auto & value : strings) {
             argv.push_back(value.data());
         }
+        // Match the normal argc/argv contract without including the terminator in argc.
+        argv.push_back(nullptr);
         auto runtime = std::make_unique<riko_runtime>();
-        if (!common_params_parse((int) argv.size(), argv.data(), runtime->params, LLAMA_EXAMPLE_SERVER)) {
+        if (!common_params_parse((int) strings.size(), argv.data(), runtime->params, LLAMA_EXAMPLE_SERVER)) {
             throw std::runtime_error("invalid llama.cpp parameters");
         }
         runtime->context.set_emotion_probe_interval(interval);
@@ -64,12 +71,29 @@ RIKO_EXPORT void * riko_create(const char * arguments, int interval, char * erro
             throw std::runtime_error("native model initialization failed");
         }
         runtime->routes->update_meta(runtime->context);
-        runtime->loop = std::thread([ptr = runtime.get()]() { ptr->context.start_loop(); });
+        runtime->loop = std::thread([ptr = runtime.get()]() {
+            try {
+                ptr->context.start_loop();
+            } catch (const std::exception & exception) {
+                std::fprintf(stderr, "riko-native context loop failed: %s\n", exception.what());
+            } catch (...) {
+                std::fprintf(stderr, "riko-native context loop failed: unknown exception\n");
+            }
+            ptr->closing.store(true);
+        });
         return runtime.release();
     } catch (const std::exception & exception) {
         if (error && capacity > 0) {
             const size_t length = std::min(capacity - 1, std::strlen(exception.what()));
             std::memcpy(error, exception.what(), length);
+            error[length] = 0;
+        }
+        return nullptr;
+    } catch (...) {
+        if (error && capacity > 0) {
+            const char * message = "unknown native initialization failure";
+            const size_t length = std::min(capacity - 1, std::strlen(message));
+            std::memcpy(error, message, length);
             error[length] = 0;
         }
         return nullptr;
@@ -81,10 +105,12 @@ RIKO_EXPORT int riko_request(void * handle, const char * path, const char * body
         return -1;
     }
     auto * runtime = static_cast<riko_runtime *>(handle);
-    const std::function<bool()> stop = [&]() { return runtime->closing.load() || cancel(data) != 0; };
-    server_http_req request{{}, {}, path, "", body, {}, stop};
+    std::function<bool()> stop;
+    std::unique_ptr<server_http_req> request;
     server_http_res_ptr response;
     try {
+        stop = [&]() { return runtime->closing.load() || cancel(data) != 0; };
+        request.reset(new server_http_req{{}, {}, path, "", body, {}, stop});
         if (stop()) {
             return 1;
         }
@@ -96,7 +122,7 @@ RIKO_EXPORT int riko_request(void * handle, const char * path, const char * body
         else if (route == "/props") handler = runtime->routes->get_props;
         else if (route == "/slots") handler = runtime->routes->get_slots;
         else throw std::runtime_error("unsupported native operation");
-        response = handler(request);
+        response = handler(*request);
         if (!response) {
             throw std::runtime_error("empty native response");
         }
@@ -113,13 +139,25 @@ RIKO_EXPORT int riko_request(void * handle, const char * path, const char * body
                 }
             }
         }
-        response->on_complete();
-        response.reset();
+        // Move ownership first: a throwing cleanup must never be invoked twice.
+        auto completed = std::move(response);
+        completed->on_complete();
         return 0;
     } catch (const std::exception & exception) {
-        if (response) response->on_complete();
+        if (response) {
+            try { response->on_complete(); } catch (...) {}
+            response.reset();
+        }
         const std::string error = json{{"error", {{"message", exception.what()}}}}.dump();
         output(500, error.data(), error.size(), data);
+        return -1;
+    } catch (...) {
+        if (response) {
+            try { response->on_complete(); } catch (...) {}
+            response.reset();
+        }
+        const char * error = "{\"error\":{\"message\":\"unknown native request failure\"}}";
+        output(500, error, std::strlen(error), data);
         return -1;
     }
 }

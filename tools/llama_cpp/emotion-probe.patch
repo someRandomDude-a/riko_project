@@ -8,7 +8,7 @@ index 70b8d7d..e31531b 100644
  target_compile_features(${TARGET} PRIVATE cxx_std_17)
 +
 +if (RIKO_NATIVE_BRIDGE_SOURCE)
-+    add_library(riko-native SHARED ${RIKO_NATIVE_BRIDGE_SOURCE})
++    add_library(riko-native SHARED "${RIKO_NATIVE_BRIDGE_SOURCE}")
 +    target_include_directories(riko-native PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 +    target_link_libraries(riko-native PRIVATE server-context)
 +    target_compile_features(riko-native PRIVATE cxx_std_17)
@@ -47,7 +47,7 @@ index 809be94..acddc4d 100644
      // use server_context methods instead
  
      common_params params_base;
-+    bool riko_probe_armed = false;
++    std::atomic<bool> riko_probe_armed{false};
 +    std::atomic<int32_t> riko_probe_interval{0};
 +    std::vector<float> riko_probe_features;
 +
@@ -83,14 +83,10 @@ index 809be94..acddc4d 100644
  
      // note: keep these alive - they determine the lifetime of the model, context, etc.
      common_init_result_ptr llama_init;
-@@ -1145,6 +1183,18 @@ private:
+@@ -1145,6 +1183,14 @@ private:
              params_base.load_progress_callback_user_data = &load_progress_text;
          }
  
-+        const char * riko_probe = getenv("RIKO_EMOTION_PROBE");
-+        if (riko_probe && std::strcmp(riko_probe, "1") == 0 && riko_probe_interval.load() == 0) {
-+            riko_probe_interval.store(32);
-+        }
 +        if (riko_probe_interval.load() > 0) {
 +            if (params_base.cb_eval) {
 +                SRV_ERR("%s", "emotion probe cannot share an evaluation callback\n");

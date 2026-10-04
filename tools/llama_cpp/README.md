@@ -13,6 +13,20 @@ not an upstream contribution. Upstream explicitly excludes activation APIs
 from its supported server scope. Do not assume the patch applies to another
 revision or that the stock WinGet binary has this feature.
 
+### Minimal upstream changes
+
+Only five upstream files are patched: the server CMake target, context `.cpp/.h`
+for opt-in hidden-state capture, and task `.cpp/.h` for feature events aligned to
+the preceding visible UTF-8 prefix. CUDA/Vulkan kernels, sampling, quantization,
+tokenization and KV-cache algorithms stay upstream. The C ABI transport and its
+exception/cancellation cleanup live in our separate `riko-native.cpp`.
+
+Windows NVCC can repeatedly warn #221 when MSVC expands the upstream `INFINITY`
+max-reduction sentinel. Release CUDA builds suppress that diagnostic through
+`--diag-suppress=221`, without changing the sentinel or disabling other diagnostic
+numbers. This suppresses all #221 warnings in that CUDA build, not just one line.
+Remove that build flag when auditing new CUDA overflow warnings.
+
 ## Build
 
 Use a separate checkout at the exact revision above. Apply `emotion-probe.patch`
