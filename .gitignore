@@ -38,6 +38,12 @@ output.wav
 /persistent_memories/conversations.sqlite3*
 /persistent_memories/whiteboard*.json
 /persistent_memories/emotion_probes/
+/models/training/expression/
+/models/*/expression probe/
+/logs/
+/release-stage/
+/release-build/
+/persistent_memories/discord_access.json
 /.native/
 /character_config.yaml.previous
 /.settings-save-*

@@ -26,13 +26,16 @@ export class AvatarEffects{
   };
  }
  update(profile,time){
-  const key=JSON.stringify(profile.lighting);
-  if(key!==this.lightKey){
+   if(profile.lighting!==this.lightingSource){
+    this.lightingSource=profile.lighting;
+   const key=JSON.stringify(profile.lighting);
+   if(key!==this.lightKey){
    this.lightKey=key;const lighting=profile.lighting;
    this.ambient.color.set(lighting.sky);this.ambient.groundColor.set(lighting.ground);this.ambient.intensity=lighting.ambient;
    for(const light of [...this.lights.children])if(light!==this.ambient){this.lights.remove(light);light.dispose?.();}
    for(const spec of lighting.lights){const light=spec.type==='directional'?new THREE.DirectionalLight(spec.color,spec.intensity):new THREE.PointLight(spec.color,spec.intensity);light.position.fromArray(spec.position);this.lights.add(light);}
-  }
+   }
+   }
   const effect=profile.effect,shader=effect.glslEnabled?effect.glsl:'';
   if(shader!==this.shaderKey){
    this.shaderKey=shader;this.failed=false;

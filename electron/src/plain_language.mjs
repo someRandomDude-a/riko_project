@@ -1,5 +1,13 @@
 // Reader-first guidance. Keep full implementation notes behind Technical details.
 const help={
+ 'runtime.native_library':'Required for llama.cpp. Choose a compatible riko-native library to run inside Python without a server process or listener. Save and restart Python; GPU acceleration requires a GPU-enabled build.',
+ 'emotion.device':'Julia runs live alongside chat. CPU keeps GPU memory available for the main model; GPU can compete with generation. Save and restart Python.',
+ 'emotion.context_tokens':'How much recent dialogue Julia uses for expressions. Smaller windows reduce analysis work but provide less context. Save and restart Python.',
+ 'logging.file_enabled':'Write rotating diagnostics to logs/debug.log. Turning this off stops file logging, not console output. Save and restart Python.',
+ 'logging.level':'DEBUG includes detailed diagnostics; INFO includes routine events and timings; WARNING includes warnings and errors; ERROR includes errors only. Save and restart Python.',
+ 'logging.inference_timings':'Log generation speed and first-token delay without collecting prompts or replies. This does not hide live chat statistics. Save and restart Python.',
+ 'logging.max_mb':'Start a new log at this size in MiB. The previous file becomes a backup. Save and restart Python.',
+ 'logging.backups':'Keep this many old logs plus the current file. Oldest backups are replaced. Save and restart Python.',
  'runtime.n_ctx':'How much text the model can use in one reply. Larger values use more memory.',
  'runtime.max_output_tokens':'The longest reply the model can produce. This also includes its internal reasoning.',
  'runtime.temperature':'Lower values give more consistent replies. Higher values add variety.',

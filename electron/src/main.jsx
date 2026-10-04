@@ -21,8 +21,12 @@ import WindowChrome from './window_chrome.jsx';
 import {ExplanationContext} from './explanation.jsx';
 import CompactScale from './compact_scale.jsx';
 import CornerResize from './corner_resize.jsx';
+import {NeuralData} from './neural_settings.jsx';
+import FirstSetup from './first_setup.jsx';
 
 function App() {
+  if(location.hash==='#/setup')return <FirstSetup/>;
+  if(location.hash==='#/neural-data')return <NeuralData/>;
   if (location.hash === '#/whiteboard') return <BoardWindow/>;
   if (location.hash === '#/effects') return <EffectsWindow/>;
   if (location.hash === '#/overlay') return <Overlay/>;

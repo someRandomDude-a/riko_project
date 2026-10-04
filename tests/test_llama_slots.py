@@ -5,7 +5,8 @@ import httpx
 import pytest
 
 from process.app_core.configuration.config import RuntimeConfig, MemoryConfig
-from process.app_core.inference.llama_server import LlamaServerProvider, SlotScheduler, server_arguments, BackgroundPreempted
+from process.app_core.inference.llama_native import InProcessLlamaProvider
+from process.app_core.inference.llama_context import SlotScheduler, native_arguments, BackgroundPreempted
 from process.app_core.conversation.messages import ChatMessage
 
 
@@ -46,13 +47,13 @@ def test_closing_scheduler_wakes_waiters_and_active_jobs():
 
 @pytest.mark.parametrize('count', [1, 5, True])
 def test_slot_count_validation(count):
-    with pytest.raises(ValueError): LlamaServerProvider(RuntimeConfig(model_path=Path('model.gguf'), parallel_slots=count))
+    with pytest.raises(ValueError): InProcessLlamaProvider(RuntimeConfig(model_path=Path('model.gguf'), parallel_slots=count))
 
 
 def test_server_flags_allocate_per_slot_context_and_one_model():
     config = RuntimeConfig(model_path=Path('model.gguf'), parallel_slots=3, n_ctx=4096, flash_attn=True,
         type_k='q8_0', type_v='q8_0', n_threads=4)
-    args = server_arguments(config, config.model_path, 12345)
+    args = native_arguments(config, config.model_path)
     assert args.count('--model') == 1
     assert args[args.index('--ctx-size')+1] == '12288'
     assert args[args.index('--parallel')+1] == '3'
@@ -69,7 +70,7 @@ def test_http_inference_pins_roles_and_enables_prompt_cache(monkeypatch):
         assert request.url.path == '/v1/responses'
         payload = json.loads(request.content); requests.append(payload)
         return httpx.Response(200, text='data: {"type":"response.output_text.delta","delta":"Hello "}\n\ndata: {"type":"response.output_text.delta","delta":"world"}\n\ndata: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Hello world"}]}]}}\n\n')
-    provider = LlamaServerProvider(RuntimeConfig(model_path=Path('model.gguf')))
+    provider = InProcessLlamaProvider(RuntimeConfig(model_path=Path('model.gguf')))
     provider.client = httpx.Client(base_url='http://test', transport=httpx.MockTransport(handler))
     monkeypatch.setattr(provider, '_start', lambda: None)
     monkeypatch.setattr(provider, '_inference_client', lambda: httpx.Client(base_url='http://test', transport=httpx.MockTransport(handler)))
@@ -90,7 +91,7 @@ def test_background_context_overflow_stops_before_inference(monkeypatch):
         if request.url.path == '/apply-template': return httpx.Response(200, json={'prompt': 'large prompt'})
         if request.url.path == '/tokenize': return httpx.Response(200, json={'tokens': list(range(4000))})
         raise AssertionError('Inference must not start for an oversized background prompt')
-    provider = LlamaServerProvider(RuntimeConfig(model_path=Path('model.gguf')))
+    provider = InProcessLlamaProvider(RuntimeConfig(model_path=Path('model.gguf')))
     provider.client = httpx.Client(base_url='http://test', transport=httpx.MockTransport(handler))
     monkeypatch.setattr(provider, '_start', lambda: None)
     monkeypatch.setattr(provider, '_inference_client', lambda: httpx.Client(base_url='http://test', transport=httpx.MockTransport(handler)))
@@ -114,7 +115,7 @@ def test_managed_provider_token_packs_before_responses_inference(monkeypatch):
         assert request.url.path == '/v1/responses'
         captured.append(body)
         return httpx.Response(200, text='data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}}\n\n')
-    provider = LlamaServerProvider(RuntimeConfig(model_path=Path('model.gguf'), n_ctx=1024))
+    provider = InProcessLlamaProvider(RuntimeConfig(model_path=Path('model.gguf'), n_ctx=1024))
     provider.client = httpx.Client(base_url='http://test', transport=httpx.MockTransport(handler))
     monkeypatch.setattr(provider, '_start', lambda: None)
     monkeypatch.setattr(provider, '_inference_client', lambda: httpx.Client(base_url='http://test', transport=httpx.MockTransport(handler)))
@@ -163,7 +164,7 @@ def test_native_warmup_probes_every_slot_without_using_chat_history(monkeypatch)
         assert request.url.path == '/v1/responses'
         requests.append(json.loads(request.content))
         return httpx.Response(200, json={})
-    provider = LlamaServerProvider(RuntimeConfig(model_path=Path('model.gguf'), parallel_slots=4))
+    provider = InProcessLlamaProvider(RuntimeConfig(model_path=Path('model.gguf'), parallel_slots=4))
     provider.client = httpx.Client(base_url='http://test', transport=httpx.MockTransport(handler))
     monkeypatch.setattr(provider, '_start', lambda: None)
     try:
@@ -173,11 +174,10 @@ def test_native_warmup_probes_every_slot_without_using_chat_history(monkeypatch)
     finally: provider.close()
 
 
-def test_missing_server_binary_has_actionable_startup_error(monkeypatch):
-    monkeypatch.setattr('process.app_core.inference.llama_server.shutil.which', lambda _: None)
-    provider = LlamaServerProvider(RuntimeConfig(model_path=Path('model.gguf')))
+def test_missing_native_library_has_actionable_startup_error():
+    provider = InProcessLlamaProvider(RuntimeConfig(model_path=Path('model.gguf')))
     try:
-        with pytest.raises(RuntimeError, match='runtime.server_path'): provider.warmup()
+        with pytest.raises(RuntimeError, match='runtime.native_library'): provider.warmup()
     finally: provider.close()
 
 

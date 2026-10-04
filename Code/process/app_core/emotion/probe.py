@@ -13,6 +13,7 @@ import math
 from pathlib import Path
 import threading
 import uuid
+import time
 
 from .models import EMOTIONS, EmotionState
 
@@ -35,6 +36,9 @@ class ProbeConfig:
     min_macro_f1: float = .65
     max_rmse: float = .2
     min_confidence: float = .6
+    auto_train: bool = True
+    idle_seconds: int = 300
+    retain_sample_text: bool = True
 
     @classmethod
     def from_raw(cls, raw):
@@ -44,12 +48,13 @@ class ProbeConfig:
         value = cls(**raw)
         if type(value.interval_tokens) is not int or not 1 <= value.interval_tokens <= 512:
             raise ValueError('probe.interval_tokens must be an integer between 1 and 512')
-        for key in ('enabled', 'use_for_expression'):
+        for key in ('enabled', 'use_for_expression', 'auto_train', 'retain_sample_text'):
             if type(getattr(value, key)) is not bool: raise ValueError(f'probe.{key} must be boolean')
         for key in ('rank', 'min_samples', 'retrain_every', 'max_samples', 'epochs'):
             n = getattr(value, key)
             if type(n) is not int or not 1 <= n <= 65536: raise ValueError(f'Invalid probe.{key}')
         if value.min_samples < 32 or value.max_samples < value.min_samples: raise ValueError('Invalid probe sample budget')
+        if type(value.idle_seconds) is not int or not 0 <= value.idle_seconds <= 86400: raise ValueError('Invalid probe.idle_seconds')
         if not isinstance(value.hidden_units, (list, tuple)) or len(value.hidden_units) != 2 or any(type(n) is not int or not 8 <= n <= 32768 for n in value.hidden_units):
             raise ValueError('probe.hidden_units must contain two widths between 8 and 32768')
         for key in ('min_agreement', 'min_macro_f1', 'max_rmse', 'min_confidence'):
@@ -116,7 +121,7 @@ def qualified(result, config):
 
 
 class EmotionProbe:
-    def __init__(self, directory, identity, teacher, config, *, idle=lambda: True, on_prediction=None, on_fallback=None):
+    def __init__(self, directory, identity, teacher, config, *, idle=lambda: True, on_prediction=None, on_fallback=None, legacy_directory=None, training_directory=None):
         import torch
         self.config, self.teacher, self.idle = config, teacher, idle
         self.on_prediction = on_prediction
@@ -131,6 +136,8 @@ class EmotionProbe:
             'network': [*config.hidden_units, config.rank]}
         self.key = identity_key(self.identity)
         self.path = Path(directory) / self.key / 'probe.pt'
+        self.data_path = Path(training_directory) / self.key / 'training.pt' if training_directory else self.path
+        self.legacy_path = Path(legacy_directory) / self.key / 'probe.pt' if legacy_directory else None
         self.condition = threading.Condition()
         self.pending = deque(maxlen=32)
         self.samples = deque(maxlen=config.max_samples)
@@ -138,6 +145,13 @@ class EmotionProbe:
         self.prediction_turn_id = None
         self.active_group = None
         self.closed, self.training, self.since_train = False, False, 0
+        self.idle_since = None
+        self.manual_training = False
+        self.data_revision = str(uuid.uuid4())
+        self.metadata = {}
+        self.save_lock = threading.Lock()
+        self.error = ''
+        self.segment_features=deque(maxlen=512)
         self._restore()
         self.thread = threading.Thread(target=self._run, name='emotion-probe', daemon=True)
         self.thread.start()
@@ -150,20 +164,94 @@ class EmotionProbe:
             self.active_group = group
             self.prediction_turn_id = None
             self.pending.clear()
+            self.segment_features.clear()
 
     def status(self):
         with self.condition:
             return {'model_key': self.key, 'ready': self.ready, 'training': self.training,
-                'samples': len(self.samples), 'pending': len(self.pending), 'validation': dict(self.validation)}
+                'samples': len(self.samples), 'pending': len(self.pending), 'validation': dict(self.validation),
+                'mode': 'probe' if self.ready and self.config.use_for_expression else 'julia_collecting',
+                'manual_training': self.manual_training, 'idle_seconds': self.config.idle_seconds,
+                'idle_elapsed': max(0,time.monotonic()-self.idle_since) if self.idle_since is not None else 0,
+                'revision': self.data_revision, 'error': self.error, 'emotions': list(EMOTIONS)}
 
-    def capture(self, hidden, transcript, group, *, cancelled=lambda: False):
+    def request_training(self):
+        with self.condition:
+            if self.training or self.manual_training: raise ValueError('Training is already running or queued')
+            if len(self.samples)<self.config.min_samples: raise ValueError('Collect more samples before training')
+            self.manual_training = True
+            self.condition.notify_all()
+            return self.status()
+
+    def training_due(self):
+        if not self.idle(): self.idle_since=None; return False
+        now=time.monotonic()
+        if self.idle_since is None: self.idle_since=now
+        return self.manual_training or (self.config.auto_train and now-self.idle_since>=self.config.idle_seconds
+            and self.since_train>=self.config.retrain_every)
+
+    @staticmethod
+    def sample_id(row):
+        return hashlib.sha256(row[2].encode()+row[0].detach().cpu().numpy().tobytes()).hexdigest()
+
+    def data_page(self, offset=0,limit=40,group=None):
+        with self.condition:
+            rows=[row for row in self.samples if group is None or row[2]==group]
+            return {'revision':self.data_revision,'total':len(rows),'emotions':list(EMOTIONS),'samples':[
+                {'id':self.sample_id(row),'group':row[2],'held_out':held_out(row[2]),
+                 'emotion':EMOTIONS[int(row[1][0])],'intensity':row[1][1],'valence':row[1][2],'arousal':row[1][3],
+                 **self.metadata.get(self.sample_id(row),{})} for row in rows[offset:offset+limit]]}
+
+    def data_groups(self,offset=0,limit=20):
+        with self.condition:
+            groups={}
+            for row in self.samples:
+                meta=self.metadata.get(self.sample_id(row),{})
+                entry=groups.setdefault(row[2],{'id':row[2],'input':meta.get('input_text'),'samples':0,'held_out':held_out(row[2]),'collected_at':meta.get('collected_at')})
+                entry['samples']+=1
+            entries=list(groups.values())
+            return {'groups':entries[offset:offset+limit],'total':len(entries),'revision':self.data_revision}
+
+    def edit_sample(self, sample_id, values, revision):
+        if not isinstance(values,dict) or set(values)!={'emotion','intensity','valence','arousal'}: raise ValueError('Edit only emotion and scores')
+        if values['emotion'] not in EMOTIONS: raise ValueError('Unknown emotion')
+        for key,low in (('intensity',0),('valence',-1),('arousal',0)):
+            value=values[key]
+            if type(value) not in (int,float) or not math.isfinite(value) or not low<=value<=1: raise ValueError('Invalid expression score')
+        with self.condition:
+            if revision!=self.data_revision: raise RuntimeError('Dataset changed; reload before editing')
+            found=False
+            for index,row in enumerate(self.samples):
+                if self.sample_id(row)!=sample_id: continue
+                target=[EMOTIONS.index(values['emotion']),values['intensity'],values['valence'],values['arousal']]
+                self.samples[index]=(row[0],target,row[2]);found=True
+            if not found: raise ValueError('Sample is no longer available')
+            self.metadata.setdefault(sample_id,{})['edited']=True
+            self.network=None;self.validation={};self.since_train=max(self.since_train,self.config.retrain_every)
+            self.data_revision=str(uuid.uuid4())
+            self._save(list(self.samples))
+            return self.status()
+
+    def capture(self, hidden, transcript, group, *, cancelled=lambda: False, replay=False,input_text=None,offset=0):
         if cancelled() or self.closed: return None
         features = latent_features(hidden)
         with self.condition:
             if cancelled() or self.closed: return None
-            self.pending.append((features, transcript, group, cancelled))
+            if not replay:self.segment_features.append((offset,features,group))
+            self.pending.append((features, transcript, group, cancelled, replay,input_text))
             self.condition.notify_all()
         return None
+
+    def expression_for_segment(self,end_offset):
+        with self.condition:
+            if not self.ready or not self.config.use_for_expression:return False
+            eligible=[item for item in self.segment_features if item[0]<=end_offset]
+            if not eligible:return False
+            _,features,group=eligible[-1]
+        state=self._predict(features,group,lambda:self.closed or self.active_group!=group)
+        if state is None:return False
+        if self.on_prediction:self.on_prediction(state)
+        return True
 
     def _predict(self, features, group, cancelled):
         import torch
@@ -197,14 +285,20 @@ class EmotionProbe:
             if state is not None and callback: callback(replace(state, turn_id=group))
 
     def _restore(self):
-        if not self.path.exists(): return
+        source = self.data_path if self.data_path.exists() else self.path if self.path.exists() else self.legacy_path
+        if source is None or not source.exists(): return
         try:
             import torch
-            saved = torch.load(self.path, map_location='cpu', weights_only=True)
+            saved = torch.load(source, map_location='cpu', weights_only=True)
             if saved['identity'] != self.identity: return
             self.samples.extend(saved['samples'][-self.config.max_samples:])
             self.since_train = min(len(self.samples), saved.get('since_train', len(self.samples)))
             self.validation = saved['validation']
+            self.metadata = saved.get('metadata', {})
+            if source == self.data_path and self.data_path != self.path and self.path.exists():
+                artifact = torch.load(self.path, map_location='cpu', weights_only=True)
+                if artifact.get('identity') == self.identity:
+                    saved['weights'] = artifact.get('weights')
             if saved.get('weights') is not None and qualified(self.validation, self.config):
                 network = build_network(self.config)
                 network.load_state_dict(saved['weights'])
@@ -225,26 +319,36 @@ class EmotionProbe:
                 if self.closed: return
                 sample = self.pending.popleft() if self.pending else None
             if sample is None:
-                if len(self.samples) >= self.config.min_samples and self.since_train >= self.config.retrain_every and self.idle():
+                if len(self.samples) >= self.config.min_samples and self.training_due():
                     try: self._train()
                     except Exception: logger.exception('Emotion probe training failed')
                 continue
-            features, transcript, group, cancelled = sample
+            features, transcript, group, cancelled, replay,input_text = sample
             if cancelled(): continue
             try:
                 prediction = self._predict(features, group, cancelled)
-                self._publish(prediction, group, cancelled)
+                if not replay: self._publish(prediction, group, cancelled)
+                if prediction is not None and self.ready and self.config.use_for_expression and not replay: continue
                 label = self.teacher.label_probe(transcript)
                 if label is None or label.source != 'julia_1' or cancelled(): continue
-                if prediction is None: self._publish(label, group, cancelled, fallback=True)
+                if prediction is None and not replay: self._publish(label, group, cancelled, fallback=True)
                 target = [EMOTIONS.index(label.primary), label.intensity, label.valence, label.arousal]
                 if not all(math.isfinite(n) for n in target): continue
                 with self.condition:
                     self.samples.append((features, target, group))
                     self.since_train += 1
+                    row=(features,target,group)
+                    self.metadata[self.sample_id(row)]={'teacher':{'emotion':label.primary,'intensity':label.intensity,'valence':label.valence,'arousal':label.arousal},
+                        'prediction':{'emotion':prediction.primary,'confidence':prediction.confidence} if prediction else None,
+                        'text':transcript[:2000] if self.config.retain_sample_text else None,
+                        'input_text':input_text[:2000] if self.config.retain_sample_text and input_text else None,
+                        'collected_at':time.time(),'edited':False}
+                    self.data_revision=str(uuid.uuid4())
+                    keep={self.sample_id(row) for row in self.samples}
+                    self.metadata={key:value for key,value in self.metadata.items() if key in keep}
                 if self.since_train % 16 == 0: self._save(list(self.samples))
                 # Foreground collection is lightweight; train only while idle.
-                if len(self.samples) >= self.config.min_samples and self.since_train >= self.config.retrain_every and self.idle():
+                if len(self.samples) >= self.config.min_samples and self.training_due():
                     self._train()
             except Exception:
                 self._publish(None, group, cancelled)
@@ -254,6 +358,7 @@ class EmotionProbe:
         import torch
         with self.condition:
             data = list(self.samples)
+            revision=self.data_revision
             self.training = True
         try:
             train = [row for row in data if not held_out(row[2])]
@@ -282,6 +387,7 @@ class EmotionProbe:
                 with torch.inference_mode():
                     incumbent = metrics(self.network(vx), vy)
             with self.condition:
+                if revision!=self.data_revision: return
                 if qualified(result, self.config) and (incumbent is None or result['macro_f1'] >= incumbent['macro_f1']):
                     self.network = network
                     self.validation = result
@@ -289,15 +395,33 @@ class EmotionProbe:
                 self.since_train = 0
             self._save(data)
         finally:
-            with self.condition: self.training = False
+            with self.condition: self.training = False; self.manual_training=False
 
     def _save(self, samples):
         import torch
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.data_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
-        torch.save({'identity': self.identity, 'samples': samples, 'validation': self.validation, 'since_train': self.since_train,
-            'weights': {key: value.cpu() for key, value in self.network.state_dict().items()} if self.network is not None else None}, temporary)
-        temporary.replace(self.path)
+        with self.save_lock:
+            dataset = {'identity': self.identity, 'samples': samples, 'validation': self.validation, 'since_train': self.since_train,
+                'metadata':self.metadata,
+                'weights': {key: value.cpu() for key, value in self.network.state_dict().items()} if self.network is not None else None}
+            if self.data_path != self.path:
+                data_temporary = self.data_path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
+                torch.save({key: value for key, value in dataset.items() if key != 'weights'}, data_temporary)
+                data_temporary.replace(self.data_path)
+                artifact = {key: value for key, value in dataset.items() if key not in {'samples', 'metadata', 'since_train'}}
+            else:
+                artifact = dataset
+            torch.save(artifact, temporary)
+            temporary.replace(self.path)
+            examples=[{'id':self.sample_id(row),'text':self.metadata.get(self.sample_id(row),{}).get('text'),
+                'emotion':EMOTIONS[int(row[1][0])],'scores':row[1][1:]} for row in samples]
+            examples=[row for row in examples if row['text']]
+            text_path=self.data_path.with_name('examples.json')
+            temporary_text=text_path.with_suffix('.'+uuid.uuid4().hex+'.tmp')
+            temporary_text.write_text(json.dumps({'model_key':self.key,'examples':examples},ensure_ascii=False),encoding='utf-8')
+            temporary_text.replace(text_path)
 
     def close(self):
         with self.condition:

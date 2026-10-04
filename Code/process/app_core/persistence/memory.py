@@ -302,7 +302,7 @@ class MemoryStore:
         self._event('classified', record=result)
 
     def _reflect(self, snapshot):
-        from ..inference.llama_server import BackgroundPreempted
+        from ..inference.llama_context import BackgroundPreempted
         permitted = self.config.reflection_enabled and self.reflection_provider and snapshot.active and not snapshot.derived and snapshot.importance >= self.config.reflection_min_importance
         if not permitted:
             with self.lock:

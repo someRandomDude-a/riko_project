@@ -122,8 +122,9 @@ class DiscordLauncher:
                 if not settings.token: raise ValueError('Configure Discord_bot_token in the local .env before starting Discord')
                 if not settings.admins: raise ValueError('Configure Discord administrators in Settings → Discord or Discord_admins in the local .env')
                 script = self.root / 'Code' / 'discord_bot.py'
-                if not script.is_file(): raise ValueError('Discord client entry point is missing')
-                self.process = subprocess.Popen([sys.executable, str(script)], cwd=self.root,
+                if not getattr(sys, 'frozen', False) and not script.is_file(): raise ValueError('Discord client entry point is missing')
+                command = [sys.executable, '--discord-worker'] if getattr(sys, 'frozen', False) else [sys.executable, str(script)]
+                self.process = subprocess.Popen(command, cwd=self.root,
                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 self.error = ''

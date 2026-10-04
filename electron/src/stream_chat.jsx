@@ -84,7 +84,8 @@ export default function StreamChat({onSettings,preferences={},compactMode=false,
           }));
         }
         if (event.type === 'chat.input') setMessages(old => mergeHistory(old,[{id: `${event.turn_id}:user`, role: 'user', text: p.text,source:p.source,conversation_id:p.conversation_id,timestamp:event.timestamp,session_id:p.conversation_id||sessionID.current,event_sequence:event.sequence}]));
-        if (event.type === 'model.started') setBusy(true);
+        if (event.type === 'model.started') {setBusy(true);setMessages(old=>mergeHistory(old,[{id:event.turn_id,role:'assistant',text:'',timestamp:event.timestamp,source:p.source,session_id:p.conversation_id||sessionID.current,event_sequence:event.sequence}]));}
+        if (event.type === 'model.metrics') setMessages(old=>old.map(m=>m.id===event.turn_id?{...m,metrics:p,event_sequence:event.sequence}:m));
         if (event.type === 'chat.delta' || event.type === 'chat.completed') {
           setMessages(old => {
             const index = old.findIndex(m => m.id === event.turn_id);
@@ -132,7 +133,7 @@ export default function StreamChat({onSettings,preferences={},compactMode=false,
         {message.session_id!==visibleMessages[index-1]?.session_id&&<details className="session-marker"><summary>{message.source==='discord'?'Discord · ':''}{message.session_id==='legacy'?'Imported conversation':`Session · ${sessions[message.session_id]?.started ? new Date(sessions[message.session_id].started*1000).toLocaleString() : 'Current'}`} {sessions[message.session_id]?.provider}</summary>
           <p>{sessions[message.session_id]?.outcome || 'running'} · {sessions[message.session_id]?.ended ? 'Ended '+new Date(sessions[message.session_id].ended*1000).toLocaleString() : 'No recorded end time'}</p>
         </details>}
-          <Message message={message} compact pendingTranscript={inlinePopup?transcript.text:''} pendingStartedAt={transcript.startedAt}/></React.Fragment>)}
+           <Message message={message} compact showInferenceStats={preferences.showInferenceStats!==false} pendingTranscript={inlinePopup?transcript.text:''} pendingStartedAt={transcript.startedAt}/></React.Fragment>)}
      </section><div className="conversation-dock">
       {(preferences.quickActions?.length>0||taskActions.length>0)&&<div className="quick-actions">{(preferences.quickActions||[]).filter(action=>action.label?.trim()&&action.prompt?.trim()).map((action,index)=><button key={action.id||index} onClick={()=>setText(action.prompt)}>{action.label}</button>)}{taskActions.map(task=><button key={task.id} onClick={()=>setText(`Help me work on task ${task.id}. Retrieve its details using the task tools.`)} title={task.title}>{task.title}</button>)}</div>}
         <div className={'composer-slot'+(inlinePopup?' popup-replaces-input':'')}><form id="chat-message-form" className="composer" onSubmit={send}><input aria-label="Message" placeholder="Message" value={text} tabIndex={inlinePopup?-1:undefined} onChange={e => setText(e.target.value)}/></form>
@@ -141,8 +142,8 @@ export default function StreamChat({onSettings,preferences={},compactMode=false,
     </div></main>;
 }
 
-export function Message({message,compact=false,pendingTranscript='',pendingStartedAt=0}) {
-  message={...message,compact};
+export function Message({message,compact=false,showInferenceStats=true,pendingTranscript='',pendingStartedAt=0}) {
+  message={...message,compact,showInferenceStats};
   let cursor = 0;
   const parts = [];
   for (const [index, item] of (message.interjections || []).entries()) {
@@ -165,5 +166,6 @@ function ReplyPart({message, start, end}) {
     <FormattedText text={message.text.slice(start, split)}/>
     {split < end && <div style={{color: '#96919e', opacity: 0.55}} title="Generated, but not spoken"><FormattedText text={message.text.slice(split, end)}/></div>}
     {message.compact&&message.timestamp&&<small className="bubble-time">{new Date(typeof message.timestamp==='number'?message.timestamp*1000:message.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</small>}
+    {message.role==='assistant'&&message.showInferenceStats&&message.metrics&&<small className="inference-stats">{message.metrics.estimated?'~':''}{message.metrics.tokens_per_second??'…'} tokens/s{message.metrics.estimated?' (estimated)':''} · {message.metrics.output_tokens} tokens · first token {message.metrics.first_token_seconds??'…'}s</small>}
   </div>;
 }

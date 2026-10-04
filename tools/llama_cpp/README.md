@@ -35,12 +35,12 @@ This CPU DLL does not provide GPU main-model inference. The probe's CPU-only
 setting is independent of the backend used to build llama.cpp.
 
 Configure `runtime.native_library` to that build's `riko-native.dll`, keeping
-its dependent llama/ggml DLLs beside it. Do not replace the installed WinGet
-binary. Leaving `native_library` unset retains the existing external server.
+its dependent llama/ggml DLLs beside it. The external llama-server backend is
+removed; leaving `native_library` unset reports an actionable initialization error.
 Existing mmap, quantization, KV cache, Flash Attention, slot scheduling and
 Responses settings remain unchanged; routes are invoked as native functions,
 not through a network. In-process mode cannot isolate a native crash from the
-Python application, so keep this opt-in until live validation is complete.
+Python application. Live validation is still required for a given build and device.
 
 ## Enable (opt-in)
 
@@ -111,9 +111,10 @@ changing other settings. Main LLM generation still evaluates every token.
   weights or rebuilding the bridge at the same path also isolates artifacts.
   Returning to an unchanged model can resume its qualified artifact and keep
   retraining as fresh samples accumulate. There is no cross-model weight reuse.
-- Private activation/label datasets live in ignored
-  `persistent_memories/emotion_probes/`. No transcript text is persisted by the
-  probe, but activations must still be treated as sensitive.
+- Private activation/label/text datasets live in ignored
+  `models/training/expression/<model-name>/<fingerprint>/`. Trained weights live
+  in `models/<model-name>/expression probe/<fingerprint>/`. Legacy artifacts remain
+  readable without deletion. Retained text and activations are sensitive local data.
 
 The network has 24,576 hidden units with low-rank connections, not a dense
 16,384-by-8,192 matrix. Width is configurable; quality must be evaluated.

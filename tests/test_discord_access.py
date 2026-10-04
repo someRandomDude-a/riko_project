@@ -54,3 +54,18 @@ def test_discord_history_uses_separate_session(tmp_path):
         assert all(m['session_id']==sid and m['source']=='discord' for m in page['messages'])
         assert page['sessions'][sid]['source']=='discord'
     finally: store.close()
+
+
+def test_access_cache_reloads_external_edits_and_preserves_fail_closed(tmp_path,monkeypatch):
+    import json
+    calls=[]
+    monkeypatch.setattr('dotenv.dotenv_values',lambda path:calls.append(path) or {'Discord_admins':'1'})
+    service=DiscordAccess(tmp_path)
+    for _ in range(20): assert service.settings().admins==frozenset({1})
+    assert len(calls)==1
+    service.path.parent.mkdir()
+    values={'admins':['2'],'users':[],'channels':[],'allow_dms':True,'admin_actions':True}
+    service.path.write_text(json.dumps(values),encoding='utf-8')
+    assert service.settings().admins==frozenset({2})
+    service.path.write_text('invalid',encoding='utf-8')
+    with pytest.raises(ValueError): service.settings()

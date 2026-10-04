@@ -54,7 +54,7 @@ class ConversationStore:
         self.pending.clear()
 
     def observe(self, event):
-        if event.type not in {'chat.input', 'model.started', 'chat.delta', 'chat.completed', 'chat.interrupted', 'chat.cancelled', 'chat.interjection', 'model.error'} or not event.turn_id: return
+        if event.type not in {'chat.input', 'model.started', 'model.metrics', 'chat.delta', 'chat.completed', 'chat.interrupted', 'chat.cancelled', 'chat.interjection', 'model.error'} or not event.turn_id: return
         with self.lock:
             if self.closed: return
             user = event.type == 'chat.input'
@@ -64,14 +64,16 @@ class ConversationStore:
             data = data if data is not None else json.loads(row[0]) if row else {'id': message_id, 'role': 'user' if user else 'assistant', 'text': '',
                 'timestamp': event.timestamp, 'session_id': self.session_id, 'status': 'running'}
             p = event.payload
+            if event.type == 'model.metrics': data['metrics'] = dict(p)
             if p.get('source') in {'discord','microphone','message'}:
                 data['source'] = p['source']
                 for key in ('conversation_id', 'user_id', 'channel_id', 'guild_id'):
                     if key in p: data[key] = p[key]
                 if p['source'] == 'discord' and p.get('conversation_id'):
                     sid = p['conversation_id']
-                    self.db.execute("INSERT OR IGNORE INTO sessions VALUES(?,?,NULL,?,'running')", (sid, event.timestamp, self.provider))
-                    self.logical_sessions.add(sid)
+                    if sid not in self.logical_sessions:
+                        self.db.execute("INSERT OR IGNORE INTO sessions VALUES(?,?,NULL,?,'running')", (sid, event.timestamp, self.provider))
+                        self.logical_sessions.add(sid)
                     data['session_id'] = sid
             data['event_sequence'] = event.sequence
             if 'initiative' in p: data.update(initiative=p['initiative'], spoken=p.get('spoken', False))
@@ -90,7 +92,7 @@ class ConversationStore:
                 else: items.append(dict(p))
             self.cache[message_id] = data
             self.pending[message_id] = data
-            if event.type != 'chat.delta': self._flush()
+            if event.type not in {'chat.delta','model.metrics'}: self._flush()
             if len(self.cache) > 200:
                 self.cache.pop(next(iter(self.cache)))
 

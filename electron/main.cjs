@@ -4,10 +4,27 @@ app.commandLine.appendSwitch('enable-gpu-rasterization');
 const path = require('path');
 const fs = require('fs');
 const YAML = require('yaml');
-const root = path.resolve(__dirname, '..');
+let root = app.isPackaged?process.resourcesPath:path.resolve(__dirname, '..');
+let backendProcess,sovitsProcess,setupWindow,shutdownRequested=false;
+if(app.isPackaged&&!app.requestSingleInstanceLock())app.quit();
+app.on('second-instance',()=>{if(setupWindow&&!setupWindow.isDestroyed())setupWindow.focus();else if(control&&!control.isDestroyed())showControls();});
+const release=require('./release.cjs');
+function setupSender(event){if(!setupWindow||setupWindow.isDestroyed()||event.sender.id!==setupWindow.webContents.id)throw new Error('Setup window required');}
+ipcMain.handle('setup-hardware',async event=>{setupSender(event);const hw=await release.hardware();try{hw.gpus=(await app.getGPUInfo('basic')).gpuDevice?.map(device=>device.deviceString||`GPU vendor ${device.vendorId}, device ${device.deviceId}`)||[];hw.vulkan=hw.gpus.join('\n')+'\n'+hw.vulkan;}catch{}return hw;});
+ipcMain.handle('setup-directory',async event=>{setupSender(event);const result=await dialog.showOpenDialog(setupWindow,{properties:['openDirectory','createDirectory']});return result.canceled?null:result.filePaths[0];});
+ipcMain.handle('setup-model',async event=>{setupSender(event);const result=await dialog.showOpenDialog(setupWindow,{properties:['openFile'],filters:[{name:'GGUF models',extensions:['gguf']}]});return result.canceled?null:result.filePaths[0];});
+ipcMain.handle('setup-sovits',async event=>{setupSender(event);const result=await dialog.showOpenDialog(setupWindow,{properties:['openFile']});return result.canceled?null:result.filePaths[0];});
+ipcMain.handle('setup-finish',(event,values)=>{setupSender(event);const directory=release.saveSetup(values.directory,values.settings,process.resourcesPath);fs.writeFileSync(path.join(app.getPath('userData'),'data-location.json'),JSON.stringify({directory}));app.relaunch();app.quit();return true;});
 const brandIcon=path.join(root,'assets','tray.png');
 let debug = false;
 let overlay, control, whiteboard, effects;
+let neuralDataWindow;
+ipcMain.handle('neural-data-open',event=>{
+ if(!control||control.isDestroyed()||event.sender.id!==control.webContents.id)throw new Error('Settings renderer required');
+ if(neuralDataWindow&&!neuralDataWindow.isDestroyed()){neuralDataWindow.show();neuralDataWindow.focus();return true;}
+ neuralDataWindow=new BrowserWindow({width:1000,height:800,title:'Expression training data',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false}});
+ protectNavigation(neuralDataWindow);neuralDataWindow.loadURL(page('neural-data'));return true;
+});
 const overlayPointer=require('./overlay_input.cjs').overlayInput(enabled=>{if(overlay&&!overlay.isDestroyed())overlay.setIgnoreMouseEvents(!enabled,{forward:true});});
 let tray;
 let controlMode='full',fullControlBounds,compactControlBounds;
@@ -50,6 +67,7 @@ function protectNavigation(window) {
   });
 }
 function prepareAvatarAssets() {
+  if(app.isPackaged)return; // Installed application resources are read-only.
   const sourceDir = path.join(__dirname, '..', 'character_files');
   const targetDirs = [path.join(__dirname, 'public', 'models'), path.join(__dirname, 'dist', 'models')];
   targetDirs.forEach(dir => fs.mkdirSync(dir, {recursive: true}));
@@ -141,10 +159,26 @@ function createTray(characterName){
   tray.setContextMenu(Menu.buildFromTemplate([{label:'Open chat',click:()=>showControls('chat')},{label:'Start Discord client',click:async()=>{try{const response=await fetch(API+'/api/discord/start',{method:'POST'});if(!response.ok){let message='Discord could not be started';try{const body=await response.json();if(typeof body.detail==='string')message=body.detail;}catch{}dialog.showErrorBox('Discord',message);}}catch{dialog.showErrorBox('Discord','The Python backend is not available. Start it before launching Discord.');}}},{label:'Settings',click:()=>showControls('settings')},{label:'Appearance',click:()=>showControls('appearance')},{label:'Whiteboard',click:()=>{patchBoard({visible:true});setBoardMode('full');}},{type:'separator'},{label:'Quit',click:()=>app.quit()}]));
   tray.on('double-click',()=>showControls('chat'));
 }
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   try {
+    if(app.isPackaged){
+      const locator=path.join(app.getPath('userData'),'data-location.json');
+      if(!fs.existsSync(locator)){
+        setupWindow=new BrowserWindow({width:1000,height:850,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false}});
+        protectNavigation(setupWindow);await setupWindow.loadURL(page('setup'));return;
+      }
+      root=JSON.parse(fs.readFileSync(locator,'utf8')).directory;
+      process.env.RIKO_CONFIG=path.join(root,'character_config.yaml');
+      backendProcess=release.startBackend(root,process.resourcesPath);
+      backendProcess.on('error',error=>dialog.showErrorBox('Backend failed to launch',error.message));
+      backendProcess.on('exit',code=>{if(!app.isQuitting&&code)dialog.showErrorBox('Backend stopped','Review logs/backend-launch.log in your data folder. Open Settings to correct the model or backend configuration.');});
+    }
     const configPath = path.resolve(root, process.env.RIKO_CONFIG || 'character_config.yaml');
     const config = YAML.parse(fs.readFileSync(configPath, 'utf8')) || {};
+    if(app.isPackaged){
+      try{sovitsProcess=release.startSovits(config.sovits_ping_config);sovitsProcess?.on('error',error=>dialog.showErrorBox('GPT-SoVITS could not start',error.message));}
+      catch(error){dialog.showErrorBox('GPT-SoVITS could not start',error.message);}
+    }
     debug = config.desktop?.debug === true;
     prepareAvatarAssets(); createWindows(config.presets?.default?.name || '');
     createTray(config.presets?.default?.name || '');
@@ -179,7 +213,7 @@ app.on('gpu-info-update',()=>publishProcesses());
 app.on('child-process-gone',()=>publishProcesses());
 ipcMain.on('sync-processes',event=>{if([control,overlay,whiteboard,effects].some(window=>window&&!window.isDestroyed()&&window.webContents.id===event.sender.id))publishProcesses(true);});
 app.on('will-quit', () => {globalShortcut.unregisterAll();publishProcesses(true,true);});
-app.on('before-quit', () => {app.isQuitting = true;endWindowGesture(); clearTimeout(geometryTimer);clearTimeout(controlTween);clearTimeout(boardTween);});
+app.on('before-quit', event => {app.isQuitting = true;if(backendProcess&&!shutdownRequested){event.preventDefault();shutdownRequested=true;release.stopBackend(backendProcess).finally(()=>app.quit());}if(sovitsProcess)sovitsProcess.kill();endWindowGesture(); clearTimeout(geometryTimer);clearTimeout(controlTween);clearTimeout(boardTween);});
 ipcMain.on('show-control', event => {if([overlay,control,whiteboard].some(w=>w&&!w.isDestroyed()&&w.webContents.id===event.sender.id))showControls();});
 function chromeWindow(event){const window=[control,whiteboard].find(w=>w&&!w.isDestroyed()&&w.webContents.id===event.sender.id);if(!window)throw new Error('Control or whiteboard renderer required');return window;}
 ipcMain.handle('window-state',event=>{const w=chromeWindow(event);return {maximized:w.isMaximized(),mode:w===control?controlMode:boardMode,dockWidth:collapsedControlBounds?.width||88};});

@@ -1,7 +1,7 @@
 import threading
 import time
 
-from process.app_core.inference.llama_server import SlotScheduler
+from process.app_core.inference.llama_context import SlotScheduler
 
 
 def test_foreground_preempts_background_and_blocks_new_work_until_turn_ends():

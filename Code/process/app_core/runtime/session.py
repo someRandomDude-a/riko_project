@@ -22,6 +22,10 @@ class SessionManager:
     """Own turns independently of capture, transcription and ordered playback."""
     def __init__(self, config, chat, state, actions=None):
         self.config, self.chat, self.state = config, chat, state
+        self.chat.emotion_playback_managed = True
+        provider=getattr(chat,'provider',None)
+        if provider is not None:
+            provider.expression_idle=lambda:not (self._generation_active or self._playing or self._speech_pending or self._user_speaking)
         self.actions = actions or ActionController()
         self._turn_lock = threading.Lock()
         self._voice_lock = threading.RLock()
@@ -155,6 +159,12 @@ class SessionManager:
                             'remaining_seconds': round(max(0, self._assertive_until - time.monotonic()), 2),
                             'interruption_seconds': self.interruption_threshold()}}
         desktop = deepcopy(self.state.snapshot())
+        # Full text remains in UI/history. A small recent-input window keeps
+        # source awareness from injecting thousands of repeated prompt tokens.
+        for key, limit in (('incoming', 5), ('notifications', 3)):
+            items = desktop.get(key, [])
+            desktop[key] = [{**item, 'text': item.get('text', '')[:240]} for item in items[:limit]]
+            desktop[key + '_omitted'] = max(0, len(items) - limit)
         for key, limit in (('tools', 10), ('actions', 10), ('whiteboard', 20)):
             items = desktop.get(key, [])
             desktop[key] = items[-limit:] if key == 'whiteboard' else items[:limit]
@@ -269,6 +279,9 @@ class SessionManager:
             elif event.type == 'voice.error':
                 self._voice_error = event.payload.get('error', '')
             elif event.type == 'voice.transcript':
+                if event.payload.get('text'):
+                    worker = getattr(self.chat, 'emotion_worker', None)
+                    if worker: worker.transcript(event.payload['text'],event.payload.get('utterance_id'))
                 if not self._live_transcript or self._live_transcript.get('utterance_id') == event.payload.get('utterance_id'):
                     self._live_transcript = {**event.payload, 'text': ' '.join(event.payload.get('text', '').split()[:400])}
                     if event.payload.get('final'): self._voice_phase = 'awake' if self.wake.active() else 'waiting'
@@ -277,6 +290,10 @@ class SessionManager:
                 self._speech_pending = max(0, self._speech_pending - 1)
             if event.type == "speech.started" and not self._interrupt_notified:
                 self._playing = dict(event.payload)
+                worker = getattr(self.chat, 'emotion_worker', None)
+                probe=getattr(getattr(self.chat,'provider',None),'probe',None)
+                if not (probe and probe.expression_for_segment(event.payload.get('end_offset') or 0)) and worker:
+                    worker.submit('speech', event.payload.get('text',''), final=True)
             elif event.type == "speech.completed":
                 if not self._interrupt_notified:
                     self._spoken_offset = event.payload.get("end_offset") or self._spoken_offset
@@ -429,6 +446,9 @@ class SessionManager:
                 with self._voice_lock:
                     if self._cancel.is_set(): raise TurnCancelled()
                     self._generated += delta
+                    worker = getattr(self.chat, 'emotion_worker', None)
+                    probe=getattr(getattr(self.chat,'provider',None),'probe',None)
+                    if worker and not (probe and probe.ready and probe.config.use_for_expression): worker.generation(delta)
                     event_bus.publish("chat.delta", turn_id=turn_id, text=delta, **origin)
                     for sentence in sentences.feed(delta): send_sentence(sentence)
 
@@ -437,11 +457,14 @@ class SessionManager:
             if getattr(self.chat, "memory_store", None): self.chat.memory_store.set_foreground(getattr(self.config.runtime, 'pause_background_on_live', True))
             response = self.chat.respond(text, user_name,
                 max_iterations=self.config.tools.max_iterations, on_delta=on_delta,
+                on_metrics=lambda value: event_bus.publish('model.metrics', turn_id=turn_id, **value) if not self._cancel.is_set() else None,
                 on_reasoning=lambda text: event_bus.publish('model.reasoning', turn_id=turn_id, text=text) if not self._cancel.is_set() else None,
                 cancelled=self._cancel.is_set, response_history=self._response_history,
                 record_user=record_user)
             with self._voice_lock:
                 if self._cancel.is_set(): raise TurnCancelled()
+                worker = getattr(self.chat, 'emotion_worker', None)
+                if worker: worker.generation('', final=True)
                 for sentence in sentences.feed("", final=True): send_sentence(sentence)
                 self._history_start = base + int(record_user)
                 self._history_end = len(self.chat.history)
@@ -480,6 +503,8 @@ class SessionManager:
             approval_turn.reset(approval_token)
 
     def cancel(self):
+        worker = getattr(self.chat, 'emotion_worker', None)
+        if worker: worker.invalidate()
         with self._voice_lock:
             self._cancel.set()
             self._assertive_until = 0.0

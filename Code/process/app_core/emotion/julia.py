@@ -83,6 +83,7 @@ class JuliaEmotionEngine:
             self.turn_id = turn_id or str(uuid.uuid4())
             self.state = EmotionState(turn_id=self.turn_id)
             self._window.clear()
+            self._transcript_utterance = None
             self._pending_tokens = 0
 
     def observe_input(self, delta: str, *, final: bool = False) -> EmotionState:
@@ -91,16 +92,35 @@ class JuliaEmotionEngine:
     def observe_output(self, delta: str, *, final: bool = False) -> EmotionState:
         return self._observe("assistant", delta, final=final)
 
-    def _observe(self, stream: str, delta: str, *, final: bool) -> EmotionState:
+    def observe_segment(self, stream, text, *, current=lambda: True):
+        return self._observe(stream, text, final=True, current=current)
+
+    def observe_transcript(self, text, utterance_id, *, current=lambda: True):
+        """Interpret a cumulative ASR snapshot, replacing this utterance's prior entry."""
+        with self._lock:
+            if not text.strip() or not current(): return self.state
+            previous = getattr(self, '_transcript_utterance', None)
+            if previous and previous[0] == utterance_id:
+                self._window = deque(entry for entry in self._window if entry is not previous[1])
+            state = self._observe('user', text, final=True, current=current)
+            self._transcript_utterance = (utterance_id, self._window[-1]) if self._window else None
+            return state
+
+    def _observe(self, stream: str, delta: str, *, final: bool, current=lambda: True) -> EmotionState:
         if not delta:
             return self.state
         with self._lock:
+            if not current(): return self.state
+            if stream == 'speech':
+                self._window = deque(entry for entry in self._window if entry[0]=='user')
             self._window.append((stream, delta))
             self._pending_tokens += self._token_count(delta)
             self._trim_window()
             if final or self._pending_tokens >= self.update_interval_tokens:
                 self._pending_tokens = 0
-                self.state = self._interpret(stream, delta)
+                state = self._interpret(stream, delta)
+                if not current(): return self.state
+                self.state = state
                 event = EmotionEvent(stream, delta, self.state)
                 if self.on_event:
                     self.on_event(event)
@@ -140,12 +160,15 @@ class JuliaEmotionEngine:
         return "\n".join(f"{stream}: {text}" for stream, text in self._window)
 
     def _interpret(self, stream: str, delta: str) -> EmotionState:
+        import time
+        started = time.perf_counter()
         model = self._load_model()
         if model is None:
             return self._fallback_state(stream, self._transcript())
         try:
             self._trim_window()
             response = model.predict(state=self._transcript(), questions=self._questions())
+            logger.debug('Julia interpretation duration_s=%.3f device=%s', time.perf_counter()-started, self.device)
             return self._parse_julia_result(response, stream)
         except Exception as exc:
             logger.warning("Julia 1 interpretation failed: %s", exc)

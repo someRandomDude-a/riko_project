@@ -33,7 +33,7 @@ conversation_store = None
 _desktop_settings_loaded = False
 logger = logging.getLogger(__name__)
 startup_error = ''
-discord_launcher = DiscordLauncher(Path(__file__).resolve().parents[1], state)
+discord_launcher = DiscordLauncher(config.root, state)
 resource_events = None
 task_file_events = None
 from process.app_core.resources.gpu_memory import GPUMonitor
@@ -155,6 +155,94 @@ def save_discord_settings(request: DiscordSettingsRequest):
 
 @app.get('/api/discord/inbox')
 def discord_inbox(): return discord_launcher.inbox_snapshot()
+
+def current_probe():
+    probe=getattr(getattr(chat,'provider',None),'probe',None)
+    if probe is None: raise HTTPException(409,'Enable the expression probe and a compatible in-process native library, then restart Python')
+    return probe
+
+@app.get('/api/neural/status')
+def neural_status():
+    probe=getattr(getattr(chat,'provider',None),'probe',None)
+    return {'available':probe is not None, **(probe.status() if probe else {'mode':'unavailable','samples':0}),
+        'note':'Requires hidden-state capture from the compatible in-process riko-native library.'}
+
+@app.post('/api/neural/train')
+def neural_train():
+    try: return current_probe().request_training()
+    except ValueError as exc: raise HTTPException(400,str(exc)) from exc
+
+@app.get('/api/neural/data')
+def neural_data(offset:int=0,limit:int=40,group:str|None=None):
+    if offset<0 or not 1<=limit<=100: raise HTTPException(400,'Invalid page')
+    return current_probe().data_page(offset,limit,group)
+
+@app.get('/api/neural/groups')
+def neural_groups(offset:int=0,limit:int=20):
+    if offset<0 or not 1<=limit<=100: raise HTTPException(400,'Invalid page')
+    return current_probe().data_groups(offset,limit)
+
+class NeuralEdit(BaseModel):
+    values:dict
+    revision:str
+
+@app.patch('/api/neural/data/{sample_id}')
+def neural_edit(sample_id:str,request:NeuralEdit):
+    try: return current_probe().edit_sample(sample_id,request.values,request.revision)
+    except ValueError as exc: raise HTTPException(400,str(exc)) from exc
+    except RuntimeError as exc: raise HTTPException(409,str(exc)) from exc
+
+@app.get('/api/neural/corpora')
+def neural_corpora():
+    from process.app_core.emotion.probe_storage import corpus_files
+    results=[]
+    for file in corpus_files(config.root):
+        try:
+            values=json.loads(file.read_text(encoding='utf-8'))
+            results.append({'key':file.parent.name,'examples':len(values.get('examples',[])),
+                'model':file.parents[1].name if file.parents[2].name=='expression' else file.parents[2].name if file.parent.parent.name=='expression probe' else 'Legacy dataset'})
+        except (OSError,ValueError): continue
+    return {'corpora':results}
+
+@app.post('/api/neural/replay/{key}')
+def neural_replay(key:str):
+    import threading
+    if len(key)!=64 or any(c not in '0123456789abcdef' for c in key): raise HTTPException(400,'Invalid model key')
+    probe=current_probe()
+    provider=chat.provider
+    from process.app_core.emotion.probe_storage import corpus_files
+    path=next((file for file in corpus_files(config.root) if file.parent.name==key),None)
+    if path is None: raise HTTPException(404,'Retained examples not found')
+    try: examples=json.loads(path.read_text(encoding='utf-8'))['examples']
+    except (OSError,ValueError,KeyError): raise HTTPException(404,'Retained examples not found')
+    if not examples: raise HTTPException(400,'No retained text is available')
+    with probe.condition:
+        if getattr(probe,'replaying',False): raise HTTPException(409,'Example replay is already running')
+        probe.replaying=True
+    def replay():
+        from process.app_core.conversation.messages import ChatMessage
+        from uuid import uuid4
+        import time
+        try:
+            for example in examples[:probe.config.max_samples]:
+                while not provider.probe_idle():
+                    if probe.closed: return
+                    time.sleep(.5)
+                text=example.get('text')
+                if not isinstance(text,str) or not text.strip(): continue
+                group='replay-'+str(uuid4())
+                provider.generate([ChatMessage('system','Use this earlier dialogue as a training scenario. Continue with a short new assistant reply.'),ChatMessage('user',text[:2000])],
+                    max_output_tokens=96,emotion_turn_id=group,probe_replay=True,cancelled=lambda:probe.closed)
+                # Finish labels before moving to another group; no history/audio/UI turn.
+                while probe.pending:
+                    if probe.closed:return
+                    time.sleep(.1)
+        except Exception:
+            logger.exception('Expression example replay failed')
+            probe.error='Example replay failed; see the diagnostic log.'
+        finally: probe.replaying=False
+    threading.Thread(target=replay,name='expression-example-replay',daemon=True).start()
+    return {'queued':True,'examples':len(examples),'note':'Old text is replayed; new activations and labels are collected. Old weights are not reused.'}
 
 @app.websocket('/ws/discord/client')
 async def discord_client(websocket: WebSocket, instance: str):

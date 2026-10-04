@@ -59,13 +59,17 @@ def _build_chat_service(config, cleanup):
         else: bridge.update(event.state)
     if config.emotion.probe.get('enabled'):
         from .emotion.probe import EmotionProbe, ProbeConfig
+        from .emotion.probe_storage import probe_directory, training_directory
         if not hasattr(provider, 'probe_factory'):
             raise ValueError('Selected provider does not expose hidden-state probe capture')
         probe_config = ProbeConfig.from_raw(config.emotion.probe)
         provider.set_probe_interval(probe_config.interval_tokens)
         provider.probe_factory = lambda identity, idle: EmotionProbe(
-            config.root / 'persistent_memories' / 'emotion_probes', identity, emotion_engine,
-            probe_config, idle=idle, on_prediction=bridge.update, on_fallback=bridge.update)
+            probe_directory(config.root, config.runtime), identity, emotion_engine,
+            probe_config, idle=idle, legacy_directory=config.root / 'persistent_memories' / 'emotion_probes',
+            training_directory=training_directory(config.root, config.runtime),
+            on_prediction=lambda state: bridge.update(state) if not getattr(emotion_engine,'playback_active',False) else None,
+            on_fallback=lambda state: bridge.update(state) if not getattr(emotion_engine,'playback_active',False) else None)
         # Julia remains the teacher and low-confidence fallback. Student
         # events use the same expression/action bridge, never tool execution.
     if config.runtime.warmup and hasattr(provider, 'warmup'): provider.warmup()

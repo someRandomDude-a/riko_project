@@ -22,10 +22,10 @@ requires compatible CUDA/cuDNN libraries. Training dependencies are separate in
 
 Review `character_config.yaml` before starting:
 
-- `runtime.provider: llama_cpp` launches a separately installed `llama-server`
-  executable. Select a local GGUF or an exact Hugging Face file/revision and set
-  `runtime.server_path` if the executable is not on PATH. No `llama-cpp-python`
-  binding is used. See [model runtime](docs/llama-runtime.md).
+- `runtime.provider: llama_cpp` runs llama.cpp inside Python through the private
+  `riko-native` library. Set `runtime.native_library` to a compatible build and
+  select a local GGUF or exact Hugging Face file/revision. No HTTP listener,
+  llama-server process or llama-cpp-python binding is used. See [model runtime](docs/llama-runtime.md).
 - Remote OpenAI-compatible providers, including LM Studio, are optional alternatives.
 - Start GPT-SoVITS separately. `sovits_ping_config` configures its HTTP endpoint,
   reference audio/transcript and PCM sample rate. Python does not load its model.
@@ -59,7 +59,7 @@ debug logging, not raw microphone/WebSocket packet dumps. Restart to apply YAML 
 ## Current features
 
 - Streamed chat with separate reasoning/tool/runtime activity and interruption history.
-- One managed llama-server model, reserved live inference lane and lower-priority
+- One in-process llama.cpp model, reserved live inference lane and lower-priority
   initiative/reflection slots; native inference uses `/v1/responses`.
 - Python-owned microphone, Silero VAD, Faster-Whisper and ordered HTTP TTS playback.
   Microphone capture starts only when requested through Voice controls.
@@ -219,3 +219,10 @@ do not erase blobs from historical commits; see the repository review.
 - Inspired by [Ryan's Riko Project](https://github.com/rayenfeng/riko_project).
 - Voice synthesis: [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS).
 - ASR: [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper).
+# Performance diagnostics
+
+Settings -> Performance & logs includes logging level (DEBUG, INFO, WARNING, ERROR), file logging, inference timings, rotation size and backup count. Restart Python after saving these settings. The rotating file is `logs/debug.log`; review it before sharing. Timing instrumentation does not record conversation text. DEBUG records inference slot wait/context packing and Julia interpretation duration; INFO records generation duration and throughput.
+
+Chat displays live llama.cpp per-request token counts and tokens/second from `timings_per_token`. Other providers use explicitly labelled estimates until final usage arrives. Counts include reasoning tokens. Julia remains live for cumulative partial user transcriptions. Settings -> Custom neural network settings manages the agent-expression probe and training data.
+
+`runtime.native_library` is required for native llama.cpp inference. There is no external-server fallback; unset paths produce an actionable startup error. Choose a GPU-enabled build for GPU inference: requesting GPU layers alone does not prove backend support. Remote OpenAI-compatible providers remain available.

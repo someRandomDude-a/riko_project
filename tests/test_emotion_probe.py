@@ -100,6 +100,30 @@ def test_capture_is_bounded_and_cancelled_work_is_not_queued(tmp_path):
     assert 'private text' not in repr(saved)
 
 
+def test_separate_training_storage_restores_samples_and_preserves_legacy(tmp_path):
+    legacy = tmp_path / 'legacy'
+    original = EmotionProbe(legacy, {'model': 'one'}, teacher(), small_config(), idle=lambda: False)
+    original.samples.append((torch.ones(256), [0, .5, 0., .5], 'message-one'))
+    original.close()
+    directory = tmp_path / 'models/one/expression probe'
+    training = tmp_path / 'models/training/expression/one'
+    probe = EmotionProbe(directory, {'model': 'one'}, teacher(), small_config(),
+        idle=lambda: False, training_directory=training, legacy_directory=legacy)
+    assert len(probe.samples) == 1
+    probe.close()
+    assert probe.data_path == training / probe.key / 'training.pt'
+    assert probe.data_path.with_name('examples.json').exists()
+    assert 'samples' not in torch.load(probe.path, weights_only=True)
+    assert len(torch.load(probe.data_path, weights_only=True)['samples']) == 1
+    assert original.path.exists()
+    restored = EmotionProbe(directory, {'model': 'one'}, teacher(), small_config(),
+        idle=lambda: False, training_directory=training)
+    try:
+        assert len(restored.samples) == 1
+    finally:
+        restored.close()
+
+
 def test_prediction_read_only_confidence_and_cancel_gate(tmp_path):
     probe = EmotionProbe(tmp_path, {'model': 'one'}, teacher(), small_config(min_confidence=.5))
     try:

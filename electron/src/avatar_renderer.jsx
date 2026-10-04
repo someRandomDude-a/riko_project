@@ -142,7 +142,8 @@ export default function AvatarRenderer({emotion, modelPath, modelFormat='auto', 
       if(!vrm||!rect.width||!rect.height||x<rect.left||x>rect.right||y<rect.top||y>rect.bottom){interaction.target=null;return false;}
       ndc.set((x-rect.left)/rect.width*2-1,1-(y-rect.top)/rect.height*2);
       raycaster.setFromCamera(ndc,camera);
-       if(fresh){vrm.scene.updateMatrixWorld(true);pickBVH?.refit(profile.springPickRadius);}
+       if(fresh)vrm.scene.updateMatrixWorld(true);
+       pickBVH?.refit(profile.springPickRadius);
       interaction.target=pickBVH?.hit(raycaster.ray)||null;
       return !!interaction.target;
     }
@@ -243,7 +244,6 @@ export default function AvatarRenderer({emotion, modelPath, modelFormat='auto', 
       const current = emotionRef.current || {};
       const nextProfile=preferencesRef.current.avatarStudioProfiles?.[catalog?.key];
       if(nextProfile!==profileSource){profileSource=nextProfile;profile=normalizeProfile(nextProfile);}
-      effects.update(profile,elapsed);
       if (vrm) {
         eyeGaze?.restore();mouseSphere?.restore();pickup?.restore();secondary.restore();
         if(!drag&&(!interaction.reaction||interaction.reaction==='idle'))for(const event of hover.update(interaction.target,performance.now(),profile.input.hoverDelay))interact(event.kind,interaction.pointer,event.target);
@@ -284,7 +284,8 @@ export default function AvatarRenderer({emotion, modelPath, modelFormat='auto', 
         if(!profile.tPose){vrm.scene.updateMatrixWorld(true);if(lastMousePoint)mouseSphere.aim(lastMousePoint,canvas.getBoundingClientRect(),camera,(modelCenter?.z||0)+profile.mouseSphere.depth);mouseSphere?.update(profile,delta);}
         vrm.scene.updateMatrixWorld(true);
         eyeGaze?.update({...profile.gaze,enabled:profile.gaze.enabled&&!profile.tPose&&animationRef.current.settings?.mouse_tracking!==false},delta,lastMousePoint,canvas.getBoundingClientRect(),camera,mouseSphere,!!interaction.pointer?.near);
-         vrm.expressionManager?.update();vrm.scene.updateMatrixWorld(true);pickBVH?.refit(profile.springPickRadius);
+         vrm.expressionManager?.update();vrm.scene.updateMatrixWorld(true);
+        if(preferencesRef.current.avatarHitOutlines)pickBVH?.refit(profile.springPickRadius);
         skeletonDebug.update(profile);hitOutlines?.update(preferencesRef.current,interaction.target);
       }
       const activeRule=(interaction.held||performance.now()<interaction.until)?interaction.rule:null;

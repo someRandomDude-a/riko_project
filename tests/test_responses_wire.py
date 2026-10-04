@@ -5,7 +5,7 @@ import pytest
 
 from process.app_core.conversation.messages import ChatMessage, ToolCall
 from process.app_core.inference.responses import response_input, response_tools, template_messages, assemble_responses, sse_events
-from process.app_core.inference.llama_server import LlamaServerProvider
+from process.app_core.inference.llama_context import LlamaContextProvider
 
 
 def terminal(text='Hello world', status='completed', extra=()):
@@ -106,4 +106,4 @@ def test_token_limit_completion_and_standard_sse_comments_and_named_events():
 @pytest.mark.parametrize('status,message', [(500,'System message must be at the beginning'), (404,'Not found')])
 def test_server_errors_show_native_cause_and_missing_endpoint_never_falls_back(status,message):
     response = httpx.Response(status, json={'error':{'message':message}})
-    with pytest.raises(RuntimeError, match=message): LlamaServerProvider._check_response(response)
+    with pytest.raises(RuntimeError, match=message): LlamaContextProvider._check_response(response)

@@ -15,9 +15,11 @@ from .config import load_config
 
 LOCK = threading.RLock()
 OBSOLETE = {'avatar.camera.distance', 'avatar.expression_engine', 'avatar.view', 'desktop.shortcuts.effects',
+            'emotion.pause_during_inference', 'runtime.server_path',
             'emotion.temperature', 'sovits_ping_config.media_type', 'your_name',
             'model','base_url','api_key','tokenizer_model'}
 ENUMS = {
+    'logging.level': ['DEBUG','INFO','WARNING','ERROR'],
     'runtime.provider': ['llama_cpp', 'lm_studio', 'openai', 'openai_compatible', 'ollama', 'local_http'],
     'runtime.api_mode': ['auto', 'responses', 'chat_completions'],
     'runtime.type_k': ['f16', 'f32', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'q5_0', 'q5_1', 'iq4_nl'],
@@ -30,6 +32,7 @@ ENUMS = {
     'sovits_ping_config.media_type': ['raw'],
 }
 RANGES = {
+    'logging.max_mb': (1,100), 'logging.backups': (1,10),
     'emotion.probe.interval_tokens': (1, 512),
     'runtime.parallel_slots': (2, 4), 'runtime.n_ctx': (1, 1048576),
     'runtime.n_gpu_layers': (-1, 1000), 'runtime.n_batch': (1, 65536), 'runtime.n_ubatch': (1, 65536),
@@ -62,16 +65,40 @@ JSON_NULLS = {'runtime.tensor_split'}
 OPTIONAL_TEXT = {'runtime.model_path', 'runtime.hf_repo_id', 'runtime.hf_filename', 'runtime.chat_format'}
 OPTIONAL_TEXT |= {'runtime.tokenizer_model', 'emotion.model_path', 'emotion.cache_dir', 'memory.system1_cache_dir'}
 OPTIONAL_TEXT |= {'runtime.native_library'}
+OPTIONAL_TEXT |= {'sovits_ping_config.executable'}
 HELP = {
-    'runtime.native_library': 'Optional in-process riko-native DLL. Reuses llama.cpp Responses/chat parsing without a server process or sockets. Required for the latent emotion probe. Restart Python to change.',
+    'sovits_ping_config.auto_start': 'Packaged app only: explicitly launch your GPT-SoVITS API executable on startup. The app stops only its owned direct process on quit. Save and restart the app, not just Python.',
+    'sovits_ping_config.executable': 'Absolute path to a GPT-SoVITS API-server executable, not a GUI launcher. Its dependencies and model weights must already be installed. Save and restart the packaged app.',
+    'sovits_ping_config.arguments': 'JSON list of command-line arguments passed directly without a shell. Configure its API port to match the endpoint URL. Restart the packaged app.',
+    'runtime.startup_timeout_seconds': 'Deadline for optional component warmup (ASR, TTS and auxiliary models), not a timeout for synchronous native model loading. Native request waits use Request timeout. Restart Python.',
+    'emotion.probe.enabled': 'Collect hidden-state features and Julia targets with a compatible in-process DLL. Julia stays live for user transcription. A validated probe can take over agent expressions; no extra main model is loaded. Restart Python.',
+    'emotion.probe.use_for_expression': 'Automatically use the probe for agent expressions only after held-out validation passes. Julia remains for user input and low-confidence or unavailable-feature fallback. Disable to continue gathering comparisons. Restart Python.',
+    'emotion.probe.auto_train': 'Train automatically only after continuous idle time and sufficient new samples. Inference, microphone activity and playback take priority. Manual Train now skips the idle delay, not foreground protection. Restart Python.',
+    'emotion.probe.idle_seconds': 'Continuous idle time before automatic training. Default 300 seconds (five minutes). Restart Python.',
+    'emotion.probe.retain_sample_text': 'Retain input and expression text for dataset review and replay with another main model. Text is private and stored locally. Applies to newly collected examples; older text-free records cannot be reconstructed. Restart Python.',
+    'emotion.probe.min_samples': 'Minimum paired samples before training; evaluation also requires enough held-out message groups and emotion classes. Restart Python.',
+    'emotion.probe.min_agreement': 'Minimum held-out emotion-label agreement with Julia before activation. Measures teacher imitation, not emotional truth. Restart Python.',
+    'emotion.probe.min_macro_f1': 'Minimum class-balanced validation score. Helps prevent agreement dominated by one frequent emotion. Restart Python.',
+    'emotion.probe.max_rmse': 'Maximum held-out score error for intensity, valence and arousal. Lower is stricter. Restart Python.',
+    'emotion.probe.min_confidence': 'Minimum prediction confidence for expressions. Below this threshold Julia remains the fallback. Restart Python.',
+    'emotion.probe.hidden_units': 'Two hidden-layer widths for the CPU expression head. Low-rank connections limit memory. Changing architecture creates a separate compatible artifact. Restart Python.',
+    'emotion.probe.rank': 'Rank of the low-rank connections. Higher values add capacity and CPU cost. Changing architecture creates a separate artifact. Restart Python.',
+    'emotion.probe.epochs': 'Number of passes through training samples. More epochs take longer and may overfit; held-out validation controls activation. Restart Python.',
+    'emotion.probe.retrain_every': 'Minimum new samples required for automatic retraining after a previous run. Manual training bypasses this count, not the minimum dataset size. Restart Python.',
+    'emotion.probe.max_samples': 'Maximum paired samples retained per compatible model artifact. Older records are evicted when this limit is reached. Retained text is part of this private dataset. Restart Python.',
+    'logging.max_mb': 'Start a new debug.log when it reaches this size in MiB. The previous file becomes a numbered backup. Save and restart Python.',
+    'logging.backups': 'Keep this many rotated files plus debug.log. Oldest backups are replaced; approximate maximum disk use is (backups + 1) times the file size. Save and restart Python.',
+    'logging.file_enabled': 'Write rotating diagnostics to logs/debug.log. Restart Python to apply. Prompts and messages are not collected by inference timing; review logs before sharing.',
+    'logging.level': 'DEBUG includes detailed application diagnostics; INFO includes inference timings; WARNING and ERROR restrict output. Restart Python to apply.',
+    'logging.inference_timings': 'Record provider duration, first-token latency and output rate without recording prompts or responses. Restart Python to apply.',
+    'runtime.native_library': 'Required for llama_cpp: a compatible riko-native library. Runs llama.cpp inside Python, including Responses, tools, streaming, cancellation and probe capture. No server process or HTTP listener. Use a CUDA-enabled build for GPU acceleration. Save and restart Python.',
     'emotion.device': 'Julia-1 teacher device: CPU by default; CUDA is opt-in and requires a compatible GPU torch/native Julia runtime. The latent probe always runs on CPU.',
     'emotion.probe.enabled': 'Train a read-only CPU emotion probe against genuine Julia-1 labels from native llama.cpp hidden states. Requires the custom in-process DLL. Julia remains fallback until held-out validation passes.',
     'emotion.probe.interval_tokens': 'Run native capture and the CPU emotion probe at most once per this many generated tokens (reasoning-only samples are excluded). Default 32. Applies immediately on save. Generation still evaluates every token. Smaller values increase capture and teacher work.',
-    'runtime.server_path': 'Path to a recent llama-server executable. Riko manages one model instance.',
     'runtime.parallel_slots': 'One slot reserved for live replies. Other slots prioritize initiative over reflection.',
     'runtime.pause_background_on_live': 'Pause/preempt managed initiative and reflection throughout foreground turns, including tool waits. Turn off to allow parallel background inference. Applies immediately when saved; does not shrink allocated KV capacity.',
     'runtime.n_ctx': 'Live conversation context including output. With unified KV, the pool adds the worst concurrent initiative/reflection budgets instead of duplicating this size per slot.',
-    'runtime.kv_unified': 'Use one shared KV pool sized for simultaneous live and background demands. Requires a recent llama-server. Disabled: each slot allocates the largest task context.',
+    'runtime.kv_unified': 'Use one native KV pool sized for simultaneous live and background demands. Disabled: each slot allocates the largest task context.',
     'runtime.kv_pool_auto': 'Keep the shared pool at the calculated maximum concurrent token demand; saved with all other settings.',
     'runtime.kv_pool_tokens': 'Total KV token capacity across all slots. Automatic mode recalculates this from task budgets; manual mode must be at least the suggested size.',
     'initiative.max_output_tokens': 'Output budget including reasoning. Invalid/empty/truncated decisions fail the attempt; no repair inference.',
@@ -109,11 +136,16 @@ HELP = {
     'animation.walk_speed': 'Desktop movement speed in pixels/second. Walking is explicitly requested; dragging always cancels it.',
 }
 LABELS = {
+    'logging.file_enabled': 'Write debug log file',
+    'logging.level': 'Log detail level',
+    'logging.inference_timings': 'Log inference performance timings',
+    'logging.max_mb': 'Log file size (MiB)',
+    'logging.backups': 'Rotated log backups',
     'runtime.native_library': 'In-process llama.cpp library',
     'emotion.probe.interval_tokens': 'Emotion probe interval (tokens)',
     'emotion.probe.enabled': 'Latent emotion probe',
     'emotion.device': 'Julia-1 compute device',
-    'runtime.provider':'Backend', 'runtime.model_path':'Local GGUF file', 'runtime.server_path':'llama-server executable',
+    'runtime.provider':'Backend', 'runtime.model_path':'Local GGUF file',
     'runtime.hf_repo_id':'Hugging Face model', 'runtime.hf_filename':'GGUF file', 'runtime.hf_revision':'Model revision',
     'runtime.hf_local_files_only':'Offline mode', 'runtime.n_ctx':'Live context length (tokens)',
     'runtime.kv_unified':'Shared KV pool',
@@ -141,7 +173,7 @@ ADVANCED_MODEL = {'runtime.seed', 'runtime.n_threads', 'runtime.n_threads_batch'
 def model_section(path):
     key = path.rsplit('.', 1)[-1]
     if path.startswith('presets.'): return 'Preset fallbacks'
-    if key in {'provider','server_path','native_library','model_path','hf_repo_id','hf_filename','hf_revision','hf_local_files_only','tokenizer_model','model','base_url','api_key','api_mode','reuse_response_ids'}: return 'Model source'
+    if key in {'provider','native_library','model_path','hf_repo_id','hf_filename','hf_revision','hf_local_files_only','tokenizer_model','model','base_url','api_key','api_mode','reuse_response_ids'}: return 'Model source'
     if key in {'n_ctx','max_output_tokens'}: return 'Token budgets'
     if key in {'temperature','seed'}: return 'Generation'
     if key in {'parallel_slots','warmup','startup_timeout_seconds','request_timeout_seconds','pause_background_on_live'}: return 'Scheduling & startup'
@@ -167,7 +199,7 @@ def field(path, value):
     nullable = value is None or path in INTEGER_NULLS | JSON_NULLS | OPTIONAL_TEXT
     group = {'runtime':'models', 'voice':'voice', 'speech':'speech', 'sovits_ping_config':'speech', 'memory':'memory',
         'wake_feedback':'voice',
-        'emotion':'memory', 'initiative':'initiative', 'tasks':'tools', 'tools':'tools',
+        'emotion':'memory', 'initiative':'initiative', 'tasks':'tools', 'tools':'tools', 'logging':'tools',
         'avatar':'appearance', 'desktop':'appearance', 'animation':'appearance'}.get(path.split('.')[0], 'character')
     if path.startswith('presets.default.model_params.'): group = 'models'
     resource_sections = {
@@ -193,6 +225,10 @@ def field(path, value):
     if path == 'emotion.probe.interval_tokens': result['restart'] = False
     if path.startswith('memory.reflection_'): result['section'] = 'Reflection'
     if path in resource_sections: result['section'] = resource_sections[path]
+    if path.startswith('logging.'):
+        result['group'], result['section'] = 'performance', 'Debug logging'
+    if path.startswith('emotion.probe.'):
+        result['group'], result['section'] = 'neural', 'Expression probe'
     result['advanced'] = path in ADVANCED_MODEL or path.startswith('presets.default.model_params.')
     if path.startswith('emotion.probe.') and path not in {'emotion.probe.enabled', 'emotion.probe.interval_tokens'}: result['advanced'] = True
     result['readonly'] = path in {'avatar.camera.distance', 'desktop.shortcuts.effects', 'avatar.expression_engine'}
@@ -202,7 +238,7 @@ def field(path, value):
     if 'importance' in path or 'temperature' in path:
         result.setdefault('min', 0); result.setdefault('max', 2 if 'temperature' in path else 1)
     result['secret'] = any(s in path.lower() for s in ('api_key', 'token', 'password')) and kind == 'text' and 'tokenizer' not in path
-    result['file'] = kind == 'text' and (path.endswith(('_file', '_path', '_directory', '_dir')) or path in {'runtime.server_path', 'runtime.native_library', 'avatar.model'})
+    result['file'] = kind == 'text' and (path.endswith(('_file', '_path', '_directory', '_dir')) or path in {'runtime.native_library', 'avatar.model', 'sovits_ping_config.executable'})
     result['multiline'] = kind == 'json' or 'prompt' in path or 'rules' in path
     return result
 
@@ -235,6 +271,10 @@ class SettingsStore:
                 if group == 'memory' and key in {'default_memories', 'history_file'}: continue
                 values[f'{group}.{key}'] = value
         values.update(dict(flatten(raw)))
+        for key,value in {'auto_start':False,'executable':None,'arguments':[]}.items():
+            values.setdefault('sovits_ping_config.'+key,value)
+        for key,value in {'file_enabled':True,'level':'INFO','inference_timings':True,'max_mb':5,'backups':3}.items():
+            values.setdefault('logging.'+key,value)
         values.pop('emotion.probe', None)
         from ..emotion.probe import ProbeConfig
         for key, value in asdict(ProbeConfig.from_raw(candidate.emotion.probe)).items():

@@ -219,11 +219,8 @@ def assemble_stream(chunks, on_delta, *, on_reasoning=None):
 def create_provider(config):
     provider = config.provider.lower().replace("-", "_")
     if provider == "llama_cpp":
-        if getattr(config, 'native_library', None):
-            from .llama_native import InProcessLlamaProvider
-            return InProcessLlamaProvider(config)
-        from .llama_server import LlamaServerProvider
-        return LlamaServerProvider(config)
+        from .llama_native import InProcessLlamaProvider
+        return InProcessLlamaProvider(config)
     if provider in {"openai", "lm_studio", "openai_compatible", "ollama", "local_http"}:
         return OpenAIProvider(config)
     raise ValueError(

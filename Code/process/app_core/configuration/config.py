@@ -53,7 +53,6 @@ class RuntimeConfig:
     kv_unified: bool = True
     kv_pool_auto: bool = True
     kv_pool_tokens: int | None = None
-    server_path: str = 'llama-server'
     startup_timeout_seconds: float = 600.0
     warmup: bool = True
     pause_background_on_live: bool = True
@@ -140,6 +139,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             raise RuntimeError("PyYAML is required to load character_config.yaml")
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     root = config_path.parent
+    sovits = raw.get('sovits_ping_config', {})
+    if type(sovits.get('auto_start', False)) is not bool:
+        raise ValueError('sovits_ping_config.auto_start must be boolean')
+    arguments = sovits.get('arguments', [])
+    if not isinstance(arguments, list) or any(not isinstance(item, str) for item in arguments):
+        raise ValueError('sovits_ping_config.arguments must be a list of strings')
     from ..audio.speech_chunks import validate_settings
     validate_settings(raw.get('speech', {}))
     from ..audio.wake_feedback import validate_settings as validate_wake_feedback
@@ -149,13 +154,21 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     preset = raw.get("presets", {}).get("default", {})
     params = preset.get("model_params", {})
     runtime_raw = raw.get("runtime", {})
+    library = runtime_raw.get('native_library')
+    if isinstance(library, str) and library.startswith('bundled:'):
+        import sys
+        backend = library.split(':', 1)[1]
+        bundle = os.getenv('RIKO_BUNDLE_ROOT')
+        if backend not in {'cuda', 'vulkan'} or not bundle:
+            raise ValueError('Bundled native library requires the packaged app and CUDA or Vulkan backend')
+        library = Path(bundle) / 'native' / backend / ('riko-native.dll' if sys.platform == 'win32' else 'libriko-native.so')
     runtime = RuntimeConfig(
         provider=runtime_raw.get("provider", "openai"),
         model=runtime_raw.get("model", raw.get("model", "")),
         base_url=runtime_raw.get("base_url", raw.get("base_url", "http://localhost:1234/v1")),
         api_key=runtime_raw.get("api_key", raw.get("api_key", os.getenv("RIKO_API_KEY", "local"))),
         model_path=_path(root, runtime_raw.get("model_path")),
-        native_library=_path(root, runtime_raw.get('native_library')),
+        native_library=_path(root, library),
         tokenizer_model=runtime_raw.get("tokenizer_model", raw.get("tokenizer_model")),
         n_ctx=int(runtime_raw.get("n_ctx", params.get("context_window_token_limit", 8192))),
         n_gpu_layers=int(runtime_raw.get("n_gpu_layers", -1)),
@@ -171,8 +184,6 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         raise ValueError('runtime.request_timeout_seconds must be positive and finite')
     from ..inference.llama_runtime import configure_runtime
     configure_runtime(runtime, runtime_raw)
-    if '/' in runtime.server_path or '\\' in runtime.server_path:
-        runtime.server_path = str(_path(root, runtime.server_path))
     tools_raw = raw.get("tools", {})
     if type(tools_raw.get('best_fit_inputs', True)) is not bool: raise ValueError('tools.best_fit_inputs must be boolean')
     for key, default, low, high in [('best_fit_timeout_seconds', .4, .05, 2), ('best_fit_min_confidence', .85, .5, 1)]:
@@ -183,7 +194,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     from ..emotion.probe import ProbeConfig
     probe_config = ProbeConfig.from_raw(emotion_raw.get('probe', {}))
     if probe_config.enabled and (runtime.provider != 'llama_cpp' or not emotion_raw.get('enabled', False)):
-        raise ValueError('emotion.probe requires emotion.enabled and runtime.provider: llama_cpp with a probe-enabled native server')
+        raise ValueError('emotion.probe requires emotion.enabled and runtime.provider: llama_cpp with a probe-enabled native library')
     if probe_config.enabled and not runtime.native_library:
         raise ValueError('emotion.probe requires runtime.native_library pointing to the in-process probe DLL')
     from ..inference.background_budget import validate_budget

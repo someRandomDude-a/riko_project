@@ -75,7 +75,7 @@ export class AvatarSkeletonDebug{
   this.helper.frustumCulled=false;this.selected=new Set();
   this.edges=this.helper.bones.filter(b=>b.parent?.isBone).map(b=>catalog.entries.find(e=>e.node===b)?.id);
   const original=this.helper.updateMatrixWorld.bind(this.helper);
-  this.helper.updateMatrixWorld=force=>{original(force);const positions=this.helper.geometry.attributes.position;
+   this.helper.updateMatrixWorld=force=>{if(!this.helper.visible)return;original(force);const positions=this.helper.geometry.attributes.position;
    this.edges.forEach((id,i)=>{if(this.selected.size&&!this.selected.has(id)){positions.setXYZ(i*2,0,0,0);positions.setXYZ(i*2+1,0,0,0);}});positions.needsUpdate=true;
   };
  }

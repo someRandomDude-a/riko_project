@@ -121,8 +121,6 @@ class GPUMonitor:
         with self.lock:
             if self.cached is not None and time.monotonic() - self.last < 3: return deepcopy(self.cached)
             owned = {os.getpid(): 'Python (ASR and runtime)'}
-            process = getattr(provider, 'process', None)
-            if process and process.poll() is None: owned[process.pid] = 'Managed llama-server'
             for pid, category in self.electron.items():
                 identity = self.electron_identity.get(pid)
                 if identity is not None and process_identity(pid) == identity: owned[pid] = category

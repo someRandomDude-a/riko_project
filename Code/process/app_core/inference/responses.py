@@ -14,7 +14,7 @@ def response_input(messages):
             continue
         if message.content or not message.tool_calls:
             if message.role == 'assistant':
-                # llama-server cannot infer an assistant output item's type.
+                # llama.cpp's Responses parser requires the assistant output item's type.
                 # This includes audible partial replies retained on interruption.
                 items.append({'type': 'message', 'role': 'assistant',
                               'content': [{'type': 'output_text', 'text': message.content}]})
@@ -105,10 +105,10 @@ def assemble_responses(events, on_delta, *, on_reasoning=None):
             break
         elif kind in {'response.failed', 'response.cancelled', 'error'}:
             detail = event.get('error') or (event.get('response') or {}).get('error') or event
-            raise RuntimeError('llama-server Responses failed: ' + str(detail)[:2000])
-    if response is None: raise RuntimeError('llama-server Responses stream ended without completion')
+            raise RuntimeError('Native Responses failed: ' + str(detail)[:2000])
+    if response is None: raise RuntimeError('Native Responses stream ended without completion')
     if response.get('status') in {'failed', 'cancelled'}:
-        raise RuntimeError('llama-server Responses failed: ' + str(response.get('error'))[:2000])
+        raise RuntimeError('Native Responses failed: ' + str(response.get('error'))[:2000])
     result = response_result(response)
     words.finish() # Never flush an unfinished word on a failed/cancelled stream.
     return result

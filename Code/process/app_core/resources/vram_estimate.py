@@ -5,7 +5,7 @@ from pathlib import Path
 import struct
 
 from .gpu_memory import MIB
-from ..inference.llama_server import context_capacity
+from ..inference.llama_context import context_capacity
 
 KV_BYTES = {'f32': 4, 'f16': 2, 'bf16': 2, 'q8_0': 34 / 32, 'q4_0': 18 / 32,
             'q4_1': 20 / 32, 'q5_0': 22 / 32, 'q5_1': 24 / 32, 'iq4_nl': 18 / 32}

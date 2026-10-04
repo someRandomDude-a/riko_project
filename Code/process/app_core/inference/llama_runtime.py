@@ -7,7 +7,7 @@ KV_TYPES = {'f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'q5_0', 'q5_1', 'iq4_n
 EXTRA_SETTINGS = ('hf_repo_id', 'hf_filename', 'hf_revision', 'hf_local_files_only',
     'n_ubatch', 'n_threads', 'n_threads_batch', 'flash_attn', 'type_k', 'type_v',
     'offload_kqv', 'use_mmap', 'use_mlock', 'main_gpu', 'split_mode', 'tensor_split',
-    'chat_format', 'cache_size_mb', 'verbose', 'parallel_slots', 'server_path',
+    'chat_format', 'cache_size_mb', 'verbose', 'parallel_slots',
     'startup_timeout_seconds', 'warmup', 'kv_unified', 'kv_pool_auto', 'kv_pool_tokens', 'pause_background_on_live')
 
 
@@ -30,7 +30,6 @@ def validate_runtime(config):
     if type(config.kv_pool_auto) is not bool: raise ValueError('runtime.kv_pool_auto must be boolean')
     if config.kv_pool_tokens is not None and (type(config.kv_pool_tokens) is not int or not 1 <= config.kv_pool_tokens <= 4194304):
         raise ValueError('runtime.kv_pool_tokens must be null or an integer from 1 to 4194304')
-    if not isinstance(config.server_path, str) or not config.server_path.strip(): raise ValueError('runtime.server_path is required')
     if type(config.startup_timeout_seconds) not in (int, float) or not math.isfinite(config.startup_timeout_seconds) or config.startup_timeout_seconds <= 0:
         raise ValueError('runtime.startup_timeout_seconds must be positive and finite')
     for key in ('n_ctx', 'n_batch', 'n_ubatch', 'main_gpu', 'cache_size_mb'):

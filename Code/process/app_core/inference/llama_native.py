@@ -14,7 +14,7 @@ import queue
 import threading
 import time
 
-from .llama_server import LlamaServerProvider, server_arguments
+from .llama_context import LlamaContextProvider, native_arguments
 from .llama_runtime import resolve_model
 
 logger = logging.getLogger(__name__)
@@ -227,7 +227,7 @@ class NativeClient:
     def get(self, path, **kwargs): return self.post(path)
 
 
-class InProcessLlamaProvider(LlamaServerProvider):
+class InProcessLlamaProvider(LlamaContextProvider):
     def __init__(self, config):
         super().__init__(config)
         self.native = None
@@ -237,16 +237,22 @@ class InProcessLlamaProvider(LlamaServerProvider):
         with self.start_lock:
             if self.closed: raise RuntimeError('Native provider closed')
             if self.native: return
+            if not self.config.native_library:
+                raise RuntimeError('Set runtime.native_library to a compatible riko-native library. The HTTP llama-server backend has been removed.')
+            if not Path(self.config.native_library).is_file():
+                raise RuntimeError(f'runtime.native_library does not exist: {self.config.native_library}. Build or select a compatible riko-native library before loading the model.')
             model = resolve_model(self.config)
-            args = server_arguments(self.config, model, 0)
-            args[0] = 'riko-native'
+            args = native_arguments(self.config, model)
             native = NativeRuntime(self.config.native_library, args, self.probe_interval if self.probe_factory else 0)
+            logger.info('Inference transport=in_process requested_gpu_layers=%s threads=%s flash_attention=%s kv_k=%s kv_v=%s slots=%s probe_interval=%s',
+                self.config.n_gpu_layers, self.config.n_threads, self.config.flash_attn, self.config.type_k, self.config.type_v,
+                self.config.parallel_slots, self.probe_interval if self.probe_factory else 0)
             self.native, self.client = native, NativeClient(native, self.config.request_timeout_seconds)
             try:
                 response = self.client.get('/slots')
                 self._check_response(response)
                 slots = response.json()
-                required = max(self.config.n_ctx, self.config.initiative_n_ctx, self.config.reflection_n_ctx)
+                required = max(self.config.n_ctx, getattr(self.config, 'initiative_n_ctx', 4096), getattr(self.config, 'reflection_n_ctx', 4096))
                 if len(slots) != self.config.parallel_slots or any(s['n_ctx'] < required for s in slots):
                     raise RuntimeError('Native context did not allocate the requested per-slot context')
                 self._initialize_probe(model)

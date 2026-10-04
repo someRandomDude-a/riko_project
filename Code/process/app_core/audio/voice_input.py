@@ -166,8 +166,6 @@ class VoiceInput:
                                                            condition_on_previous_text=False)
                         text = " ".join(item.text.strip() for item in segments).strip()
                     if text:
-                        if hasattr(self.session.state, 'observe_input'):
-                            self.session.state.observe_input('microphone', text, message_id=segment.utterance_id)
                         if segment.provisional: partial_text = text
                         else: parts.append(text)
                 text = " ".join([*parts, *([partial_text] if partial_text else [])])
@@ -177,6 +175,8 @@ class VoiceInput:
                 if segment.final:
                     self._parts.pop(segment.utterance_id, None)
                     if text:
+                        observer = getattr(getattr(self.session, 'state', None), 'observe_input', None)
+                        if observer: observer('microphone', text, message_id=segment.utterance_id)
                         # Preserve interjections immediately, even if the reply
                         # dispatch worker is still waiting on an earlier turn.
                         accepted = True

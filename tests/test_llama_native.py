@@ -1,4 +1,5 @@
 import ctypes
+import json
 import threading
 from types import SimpleNamespace
 
@@ -6,6 +7,9 @@ import pytest
 
 from process.app_core.inference.llama_native import NativeClient, NativeRuntime
 from process.app_core.configuration.config import load_config
+from process.app_core.configuration.config import RuntimeConfig
+from process.app_core.conversation.messages import ChatMessage
+from process.app_core.inference.llama_native import InProcessLlamaProvider
 from process.app_core.configuration.settings_store import SettingsStore, field
 
 
@@ -93,8 +97,8 @@ def test_token_count_response_helpers_and_no_retained_bodies():
 
 def test_non_json_native_errors_have_readable_details():
     response = NativeClient(fake_runtime([(500, b'failed')])).get('/props')
-    from process.app_core.inference.llama_server import LlamaServerProvider
-    with pytest.raises(RuntimeError, match='failed'): LlamaServerProvider._check_response(response)
+    from process.app_core.inference.llama_context import LlamaContextProvider
+    with pytest.raises(RuntimeError, match='failed'): LlamaContextProvider._check_response(response)
     with pytest.raises(RuntimeError, match='failed'): response.raise_for_status()
 
 
@@ -165,3 +169,133 @@ def test_runtime_close_cancels_and_joins_before_destroy():
     assert destroyed == [123] and runtime.handle is None
     runtime.close()
     assert destroyed == [123]
+
+
+def test_provider_native_routes_startup_tools_timings_and_slots(tmp_path, monkeypatch):
+    """Exercise the provider through real NativeClient/ctypes callbacks, not HTTP mocks."""
+    model = tmp_path / 'model.gguf'
+    model.write_bytes(b'test-model')
+    (tmp_path / 'riko-native.dll').write_bytes(b'test-library')
+    runtime = fake_runtime([])
+    requests, destroyed = [], []
+    def request(handle, path, body, output, cancel, user):
+        path, payload = path.decode(), json.loads(body)
+        requests.append((path, payload))
+        if path == '/slots': data = [{'n_ctx': 8192}, {'n_ctx': 8192}]
+        elif path == '/apply-template': data = {'prompt': 'rendered'}
+        elif path == '/tokenize': data = {'tokens': [1, 2, 3]}
+        elif path == '/v1/responses':
+            events = [
+                {'type': 'response.output_text.delta', 'delta': 'Hello ',
+                    'timings': {'predicted_n': 2, 'predicted_per_second': 20}},
+                {'type': 'response.output_text.delta', 'delta': 'world'},
+                {'type': 'response.completed', 'response': {'status': 'completed', 'output': [
+                    {'type': 'message', 'content': [{'type': 'output_text', 'text': 'Hello world'}]},
+                    {'type': 'function_call', 'call_id': 'call-1', 'name': 'lookup', 'arguments': '{"query":"color"}'}]}}]
+            data = ''.join('data: ' + json.dumps(event) + '\n\n' for event in events).encode()
+        else: raise AssertionError(path)
+        if not isinstance(data, bytes): data = json.dumps(data).encode()
+        buffer = ctypes.create_string_buffer(data)
+        output(200, ctypes.cast(buffer, ctypes.c_void_p), len(data), user)
+        return 0
+    runtime.dll = SimpleNamespace(riko_request=request, riko_stop=lambda _: None,
+        riko_destroy=lambda handle: destroyed.append(handle))
+    def create(library, args, interval):
+        assert args[0] == 'riko-native'
+        assert '--host' not in args and '--port' not in args
+        assert interval == 0
+        return runtime
+    monkeypatch.setattr('process.app_core.inference.llama_native.NativeRuntime', create)
+    provider = InProcessLlamaProvider(RuntimeConfig(provider='llama_cpp', model_path=model,
+        native_library=tmp_path / 'riko-native.dll'))
+    text, timing = [], []
+    try:
+        result = provider.generate([ChatMessage('user', 'Hi')], on_delta=text.append,
+            on_metrics=timing.append, tools=[{'type': 'function', 'function': {'name': 'lookup', 'parameters': {'type': 'object'}}}])
+        assert result.message.content == 'Hello world'
+        assert result.message.tool_calls[0].id == 'call-1'
+        assert result.message.tool_calls[0].arguments == {'query': 'color'}
+        assert ''.join(text) == 'Hello world'
+        assert timing == [{'predicted_n': 2, 'predicted_per_second': 20}]
+        assert provider.count_tokens([ChatMessage('user', 'Hi')]) == 3
+        provider.reflection.generate([ChatMessage('user', 'Reflect')])
+        provider.initiative.generate([ChatMessage('user', 'Consider')])
+        payloads = [body for path, body in requests if path == '/v1/responses']
+        assert [body['id_slot'] for body in payloads] == [0, 1, 1]
+        assert all(body['cache_prompt'] and body['timings_per_token'] for body in payloads)
+        assert payloads[0]['tools'][0]['name'] == 'lookup'
+    finally:
+        provider.close()
+    assert destroyed == [123]
+
+
+def test_llama_cpp_never_selects_external_server_without_library():
+    from process.app_core.inference.providers import create_provider
+    provider = create_provider(RuntimeConfig(provider='llama_cpp', model_path='unused.gguf'))
+    try:
+        assert isinstance(provider, InProcessLlamaProvider)
+        with pytest.raises(RuntimeError, match='native_library'): provider.warmup()
+    finally:
+        provider.close()
+
+
+def test_settings_hide_legacy_server_path(tmp_path):
+    path = tmp_path / 'character_config.yaml'
+    path.write_text('runtime:\n  provider: openai\n  server_path: old-server\n', encoding='utf-8')
+    snapshot = SettingsStore(path).snapshot()
+    assert all(item['path'] != 'runtime.server_path' for item in snapshot['fields'])
+    assert 'Required for llama_cpp' in field('runtime.native_library', None)['help']
+
+
+def test_missing_library_fails_before_model_resolution(tmp_path, monkeypatch):
+    def unexpected(config): raise AssertionError('No model download before library validation')
+    monkeypatch.setattr('process.app_core.inference.llama_native.resolve_model', unexpected)
+    provider = InProcessLlamaProvider(RuntimeConfig(model_path=tmp_path / 'model.gguf',
+        native_library=tmp_path / 'missing.dll'))
+    try:
+        with pytest.raises(RuntimeError, match='native_library does not exist'): provider.warmup()
+    finally:
+        provider.close()
+
+
+def test_native_probe_capture_checks_utf8_prefix_and_turn_alignment(monkeypatch):
+    from process.app_core.emotion.probe import FEATURE_VERSION
+    runtime = fake_runtime([])
+    samples = []
+    probe = SimpleNamespace(active_group=None, close=lambda: None)
+    probe.activate = lambda group: setattr(probe, 'active_group', group)
+    probe.capture = lambda features, text, group, **kwargs: samples.append((features, text, group, kwargs))
+    def request(handle, path, body, output, cancel, user):
+        path = path.decode()
+        if path == '/apply-template': data = json.dumps({'prompt': 'rendered'}).encode()
+        elif path == '/tokenize': data = json.dumps({'tokens': [1]}).encode()
+        else:
+            assert path == '/v1/responses'
+            sample = {'type': 'riko.emotion_probe.sample', 'feature_version': FEATURE_VERSION,
+                'prefix_bytes': 5, 'features': [0.] * 256}
+            events = [{'type': 'response.output_text.delta', 'delta': 'café'},
+                {**sample, 'prefix_bytes': 4}, sample,
+                {'type': 'response.completed', 'response': {'status': 'completed', 'output': [
+                    {'type': 'message', 'content': [{'type': 'output_text', 'text': 'café'}]}]}}]
+            data = ''.join('data: ' + json.dumps(event) + '\n\n' for event in events).encode()
+        buffer = ctypes.create_string_buffer(data)
+        output(200, ctypes.cast(buffer, ctypes.c_void_p), len(data), user)
+        return 0
+    runtime.dll.riko_request = request
+    provider = InProcessLlamaProvider(RuntimeConfig(model_path='unused.gguf'))
+    provider.native = runtime
+    provider.client = NativeClient(runtime)
+    provider.probe = probe
+    monkeypatch.setattr(provider, '_start', lambda: None)
+    runtime.dll.riko_stop = lambda _: None
+    runtime.dll.riko_destroy = lambda _: None
+    try:
+        provider.generate([ChatMessage('user', 'Bonjour')], emotion_turn_id='message-one')
+        assert len(samples) == 1
+        features, text, group, options = samples[0]
+        assert features.shape == (256,) and features.device.type == 'cpu'
+        assert text == 'user: Bonjour\nassistant: café' and group == 'message-one'
+        assert options['input_text'] == 'Bonjour' and options['offset'] == 4
+        assert not options['cancelled']()
+    finally:
+        provider.close()

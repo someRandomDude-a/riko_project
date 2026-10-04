@@ -1,4 +1,6 @@
 const {contextBridge, ipcRenderer} = require('electron');
+contextBridge.exposeInMainWorld('setupBridge',{hardware:()=>ipcRenderer.invoke('setup-hardware'),directory:()=>ipcRenderer.invoke('setup-directory'),model:()=>ipcRenderer.invoke('setup-model'),sovits:()=>ipcRenderer.invoke('setup-sovits'),finish:values=>ipcRenderer.invoke('setup-finish',values)});
+contextBridge.exposeInMainWorld('neuralBridge',{openData:()=>ipcRenderer.invoke('neural-data-open')});
 contextBridge.exposeInMainWorld('gestureBridge',{send:value=>ipcRenderer.send('window-gesture',value)});
 contextBridge.exposeInMainWorld('avatarCursorBridge',{position:()=>ipcRenderer.invoke('avatar-cursor')});
 contextBridge.exposeInMainWorld('overlayInputBridge',{native:process.platform==='win32',drag:(source,active)=>ipcRenderer.send('overlay-drag',{source,active}),position:()=>ipcRenderer.invoke('avatar-cursor'),subscribe:callback=>{const listener=(_event,value)=>callback(value);ipcRenderer.on('overlay-pointer',listener);return()=>ipcRenderer.removeListener('overlay-pointer',listener);}});

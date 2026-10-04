@@ -5,7 +5,7 @@ import pytest
 
 from process.app_core.configuration.config import AppConfig, RuntimeConfig
 from process.app_core.resources.gpu_memory import GPUMonitor, reconcile
-from process.app_core.inference.llama_server import context_capacity, server_arguments
+from process.app_core.inference.llama_context import context_capacity, native_arguments
 from process.app_core.resources.vram_estimate import estimate, read_gguf
 
 
@@ -31,13 +31,13 @@ def test_pool_uses_worst_concurrent_task_budgets(tmp_path):
     assert context_capacity(c.runtime) == 16384 + 8192 + 2 * 4096
     c.runtime.kv_unified = False
     assert context_capacity(c.runtime) == 16384 * 4
-    assert '--no-kv-unified' in server_arguments(c.runtime, Path('test.gguf'), 1234)
+    assert '--no-kv-unified' in native_arguments(c.runtime, Path('test.gguf'))
 
 
 def test_manual_pool_overrides_allocation_but_cannot_undersize(tmp_path):
     c = config(tmp_path, kv_pool_auto=False, kv_pool_tokens=32768)
     assert context_capacity(c.runtime) == 32768
-    args = server_arguments(c.runtime, Path('test.gguf'), 1234)
+    args = native_arguments(c.runtime, Path('test.gguf'))
     assert args[args.index('--ctx-size')+1] == '32768'
     c.runtime.kv_pool_tokens = 1024
     with pytest.raises(ValueError, match='configured concurrent'): context_capacity(c.runtime)

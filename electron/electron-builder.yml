@@ -1,0 +1,35 @@
+appId: ai.riko.desktop
+productName: Riko
+asar: true
+directories:
+  output: release
+files:
+  - '*.cjs'
+  - dist/**
+  - package.json
+extraResources:
+  - from: ../release-stage/backend
+    to: backend
+  - from: ../release-stage/native
+    to: native
+  - from: ../assets
+    to: assets
+  - from: ../release-stage/notices
+    to: notices
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  category: Utility
+  maintainer: Riko contributors

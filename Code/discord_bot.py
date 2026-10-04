@@ -8,7 +8,7 @@ def main():
     from dotenv import load_dotenv
     from process.app_core.integrations.discord.access import DiscordAccess
     from process.app_core.integrations.discord.bot import CompanionBot
-    root = Path(__file__).resolve().parents[1]
+    root = Path(os.environ.get('RIKO_DATA_DIR', Path(__file__).resolve().parents[1]))
     load_dotenv(root / '.env') # Never search parent/private directories for credentials.
     settings = DiscordAccess(root).settings()
     if not settings.token: raise ValueError('Discord_bot_token is required')

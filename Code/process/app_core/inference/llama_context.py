@@ -1,18 +1,15 @@
-"""One managed model, reserved live slot and priority-ordered background leases."""
+"""Native model request protocol, context budgeting and priority-ordered slots."""
 from contextlib import contextmanager
 import logging
 import queue
-import shutil
-import socket
-import subprocess
 import threading
 import time
 import hashlib
 import uuid
-import os
 import math
 
-from .llama_runtime import resolve_model, validate_runtime
+from .llama_runtime import validate_runtime
+logger = logging.getLogger(__name__)
 
 
 class BackgroundPreempted(RuntimeError): pass
@@ -93,9 +90,9 @@ def context_capacity(config):
     return pool_capacity(config)
 
 
-def server_arguments(config, model, port):
-    if not config.n_ctx: raise ValueError('Managed llama-server requires explicit per-slot runtime.n_ctx > 0')
-    args = [config.server_path, '--model', str(model), '--host', '127.0.0.1', '--port', str(port),
+def native_arguments(config, model):
+    if not config.n_ctx: raise ValueError('Native llama.cpp requires explicit per-slot runtime.n_ctx > 0')
+    args = ['riko-native', '--model', str(model),
         '--parallel', str(config.parallel_slots), '--ctx-size', str(context_capacity(config)),
         '--kv-unified' if config.kv_unified else '--no-kv-unified', '--cont-batching', '--jinja', '--slots', '--no-context-shift',
         '--n-gpu-layers', str(config.n_gpu_layers), '--batch-size', str(config.n_batch),
@@ -113,36 +110,35 @@ def server_arguments(config, model, port):
     return args
 
 
-class ServerLane:
+class InferenceLane:
     def __init__(self, owner, role): self.owner, self.role = owner, role
     def generate(self, messages, *, tools=None, **options):
         return self.owner._generate(self.role, messages, tools=tools, **options)
     def count_tokens(self, messages): return self.owner.count_tokens(messages)
 
 
-class LlamaServerProvider(ServerLane):
+class LlamaContextProvider(InferenceLane):
     supports_latent_probe = True
     def __init__(self, config):
         validate_runtime(config)
         context_capacity(config)
-        if not config.n_ctx: raise ValueError('Managed llama-server requires explicit per-slot runtime.n_ctx > 0')
+        if not config.n_ctx: raise ValueError('Native llama.cpp requires explicit per-slot runtime.n_ctx > 0')
         super().__init__(self, 'live')
         self.config = config
         self.scheduler = SlotScheduler(config.parallel_slots, pause_background=config.pause_background_on_live)
         self.start_lock = threading.Lock()
-        self.process = None
         self.client = None
         self.closed = False
-        self.log_tail = []
-        self.initiative = ServerLane(self, 'initiative')
-        self.reflection = ServerLane(self, 'reflection')
+        self.initiative = InferenceLane(self, 'initiative')
+        self.reflection = InferenceLane(self, 'reflection')
         self.reflection_parallelism = config.parallel_slots - 1
         self.probe_factory = None
         self.probe = None
 
     def probe_idle(self):
         with self.scheduler.condition:
-            return not self.scheduler.foreground and not self.scheduler.active and not self.scheduler.waiting
+            available=not self.scheduler.foreground and not self.scheduler.active and not self.scheduler.waiting
+        return available and getattr(self,'expression_idle',lambda:True)()
 
     def _initialize_probe(self, model):
         if not self.probe_factory or self.probe: return
@@ -151,7 +147,7 @@ class LlamaServerProvider(ServerLane):
         self._check_response(response)
         props = response.json()
         if props.get('riko_emotion_probe') != FEATURE_VERSION:
-            raise RuntimeError('Emotion probe needs the custom native llama-server build; stock HTTP servers do not expose activations')
+            raise RuntimeError('Emotion probe requires a compatible riko-native library with hidden-state capture')
         digest = hashlib.sha256()
         # Include all split shards, not just the first file.
         files = [model]
@@ -178,55 +174,14 @@ class LlamaServerProvider(ServerLane):
         self.scheduler.set_pause_background(enabled)
 
     def _start(self):
-        with self.start_lock:
-            if self.closed: raise RuntimeError('llama-server provider closed')
-            if self.process and self.process.poll() is None: return
-            if self.client: self.client.close()
-            executable = shutil.which(self.config.server_path)
-            if not executable: raise RuntimeError('Install llama-server and set runtime.server_path to its executable')
-            model = resolve_model(self.config)
-            with socket.socket() as reservation:
-                reservation.bind(('127.0.0.1', 0))
-                port = reservation.getsockname()[1]
-            args = server_arguments(self.config, model, port)
-            args[0] = executable
-            environment = dict(os.environ)
-            environment['RIKO_EMOTION_PROBE'] = '1' if self.probe_factory else '0'
-            self.process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', env=environment)
-            process = self.process
-            def logs():
-                for line in process.stdout:
-                    self.log_tail = (self.log_tail + [line.rstrip()])[-20:]
-                    log = logging.getLogger(__name__)
-                    (log.info if self.config.verbose else log.debug)('llama-server: %s', line.rstrip())
-                process.stdout.close()
-            threading.Thread(target=logs, daemon=True, name='llama-server-logs').start()
-            import httpx
-            self.client = httpx.Client(base_url=f'http://127.0.0.1:{port}', timeout=self.config.request_timeout_seconds)
-            deadline = time.monotonic() + self.config.startup_timeout_seconds
-            try:
-                while time.monotonic() < deadline:
-                    if self.closed or process.poll() is not None: raise RuntimeError('llama-server startup failed: ' + '\n'.join(self.log_tail))
-                    try:
-                        if self.client.get('/health', timeout=1).status_code == 200:
-                            slots = self.client.get('/slots').json()
-                            required = max(self.config.n_ctx, getattr(self.config, 'initiative_n_ctx', 4096), getattr(self.config, 'reflection_n_ctx', 4096))
-                            if len(slots) != self.config.parallel_slots or any(s['n_ctx'] < required for s in slots):
-                                raise RuntimeError('Server did not allocate the requested per-slot context')
-                            self._initialize_probe(model)
-                            return
-                    except httpx.TransportError: pass
-                    time.sleep(.1)
-                raise TimeoutError('llama-server startup deadline exceeded')
-            except BaseException:
-                if process.poll() is None: process.kill()
-                process.wait(timeout=5)
-                raise
+        raise NotImplementedError('Native transport must initialize the model context')
 
     def _generate(self, role, messages, *, tools=None, **options):
+        queued_at = time.perf_counter()
         self._start()
         cancelled = options.get('cancelled', lambda: False)
         with self.scheduler.lease(role, cancelled) as (slot, stop):
+            leased_at = time.perf_counter()
             def check():
                 if stop.is_set() or cancelled() or self.closed: raise BackgroundPreempted('Inference preempted/cancelled')
             check()
@@ -240,10 +195,10 @@ class LlamaServerProvider(ServerLane):
             payload = dict(input=response_input(formatted), stream=True,
                 temperature=options.get('temperature', self.config.temperature),
                 max_output_tokens=options.get('max_output_tokens', self.config.max_output_tokens),
-                id_slot=slot, cache_prompt=True)
+                id_slot=slot, cache_prompt=True, timings_per_token=True)
             if tools: payload['tools'] = response_tools(tools)
             # A per-request transport lets cancellation close even a stalled
-            # header read without affecting other slots' HTTP connections.
+            # first callback without affecting other slots' native requests.
             with self._inference_client() as client:
                 finished = threading.Event()
                 def watch():
@@ -265,6 +220,8 @@ class LlamaServerProvider(ServerLane):
                         self._check_response(tokenized)
                         return len(tokenized.json()['tokens'])
                     packed = pack_context(messages, count, limit, payload['max_output_tokens'], cancelled=lambda: stop.is_set() or cancelled() or self.closed)
+                    logger.debug('Inference preflight provider=%s role=%s slot=%s wait_s=%.3f context_pack_s=%.3f messages=%s context_limit=%s',
+                        type(self).__name__, role, slot, leased_at-queued_at, time.perf_counter()-leased_at, len(packed), limit)
                     payload['input'] = response_input(template_messages(packed))
                     with client.stream('POST', '/v1/responses', json=payload) as response:
                         self._check_response(response)
@@ -273,6 +230,7 @@ class LlamaServerProvider(ServerLane):
                             last_user = next((m.content for m in reversed(packed) if m.role == 'user'), '')
                             for event in sse_events(response.iter_lines()):
                                 check()
+                                if event.get('timings') and options.get('on_metrics'): options['on_metrics'](event['timings'])
                                 if event.get('type') == 'response.output_text.delta': visible += event.get('delta') or ''
                                 elif event.get('type') == 'riko.emotion_probe.sample' and self.probe and role == 'live':
                                     from ..emotion.probe import FEATURE_VERSION
@@ -284,7 +242,8 @@ class LlamaServerProvider(ServerLane):
                                         import torch
                                         from ..conversation.output_filter import clean_output
                                         self.probe.capture(torch.tensor(features, device='cpu'), f'user: {last_user}\nassistant: {clean_output(visible)}', group,
-                                            cancelled=lambda: stop.is_set() or cancelled() or self.closed or self.probe.active_group != group)
+                                             cancelled=lambda: stop.is_set() or cancelled() or self.closed or self.probe.active_group != group,
+                                             replay=bool(options.get('probe_replay')),input_text=last_user,offset=len(clean_output(visible)))
                                 yield event
                             check()
                         result = assemble_responses(chunks(), options.get('on_delta', lambda _: None), on_reasoning=options.get('on_reasoning'))
@@ -297,8 +256,7 @@ class LlamaServerProvider(ServerLane):
                 finally: finished.set()
 
     def _inference_client(self):
-        import httpx
-        return httpx.Client(base_url=self.client.base_url, timeout=self.config.request_timeout_seconds)
+        raise NotImplementedError('Native transport must provide a request client')
 
     @staticmethod
     def _check_response(response):
@@ -309,8 +267,8 @@ class LlamaServerProvider(ServerLane):
             error = body.get('error', body)
             detail = error.get('message', str(error)) if isinstance(error, dict) else str(error)
         except (ValueError, AttributeError): detail = response.text
-        hint = ' Install a recent llama-server build with /v1/responses support.' if response.status_code in {404, 405, 501} else ''
-        raise RuntimeError(f'llama-server Responses HTTP {response.status_code}: {str(detail).strip()[:2000]}{hint}')
+        hint = ' Rebuild the compatible riko-native library with Responses support.' if response.status_code in {404, 405, 501} else ''
+        raise RuntimeError(f'Native llama.cpp operation {response.status_code}: {str(detail).strip()[:2000]}{hint}')
 
     def stream(self, messages, *, tools=None, **options):
         output = queue.Queue(maxsize=128)
@@ -350,7 +308,7 @@ class LlamaServerProvider(ServerLane):
         return len(response.json()['tokens'])
 
     def warmup(self):
-        self._start() # Native llama-server performs model warmup at load.
+        self._start() # llama.cpp performs model warmup at load.
         for slot in range(self.config.parallel_slots):
             response = self.client.post('/v1/responses', json={'input': [{'role':'user','content':'Hello'}],
                 'max_output_tokens': 1, 'id_slot': slot, 'cache_prompt': True})
@@ -361,8 +319,4 @@ class LlamaServerProvider(ServerLane):
         self.closed = True
         self.scheduler.close()
         if self.probe: self.probe.close()
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            try: self.process.wait(timeout=3)
-            except subprocess.TimeoutExpired: self.process.kill(); self.process.wait(timeout=3)
         if self.client: self.client.close()

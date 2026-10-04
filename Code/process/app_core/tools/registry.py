@@ -225,7 +225,8 @@ class ToolRegistry:
             except Exception: logger.exception('Unable to close MCP client')
 
     def _isolated_call(self, tool, arguments):
-        process = subprocess.Popen([sys.executable, str(Path(__file__).with_name('worker.py'))],
+        command = [sys.executable, '--tool-worker'] if getattr(sys, 'frozen', False) else [sys.executable, str(Path(__file__).with_name('worker.py'))]
+        process = subprocess.Popen(command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
         with self._execution_lock:
             if self._closed:
