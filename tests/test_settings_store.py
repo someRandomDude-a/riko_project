@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 import pytest
 
@@ -102,7 +103,14 @@ def test_repository_model_and_cache_validation(store):
     assert not result['valid']
 
 
+def test_fixture_character_configuration_has_valid_settings(store):
+    assert store.validate({}) == {'valid':True,'errors':{}}
+    assert 'runtime.provider' in store.snapshot()['values']
+
+
 def test_current_character_configuration_has_valid_settings():
+    if os.environ.get('RIKO_RELEASE_BUILD') == '1':
+        pytest.skip('Release builds exclude the private local configuration')
     path=Path(__file__).resolve().parents[1]/'character_config.yaml'
     store=SettingsStore(path)
     assert store.validate({}) == {'valid':True,'errors':{}}
