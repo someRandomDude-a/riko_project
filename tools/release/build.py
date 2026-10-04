@@ -16,6 +16,12 @@ def run(*args, cwd=ROOT):
     subprocess.run([str(a) for a in args], cwd=cwd, check=True)
 
 
+def cmake_file_definition(name, path):
+    # CMake substitutes this value into generated source lists. Windows
+    # backslashes (for example D:\a\...) can otherwise become invalid escapes.
+    return f'-D{name}:FILEPATH={path.as_posix()}'
+
+
 def main():
     checkout = ROOT / '.native/llama.cpp-release'
     if checkout.exists(): raise RuntimeError('Use a clean release workspace; refusing to overwrite a checkout')
@@ -28,7 +34,7 @@ def main():
         build = checkout / ('build-' + backend)
         flags = ['-DBUILD_SHARED_LIBS=ON', '-DGGML_NATIVE=OFF', '-DLLAMA_BUILD_TESTS=OFF',
             '-DLLAMA_BUILD_EXAMPLES=OFF', '-DLLAMA_BUILD_SERVER=ON',
-            f'-DRIKO_NATIVE_BRIDGE_SOURCE={ROOT / "tools/llama_cpp/riko-native.cpp"}',
+            cmake_file_definition('RIKO_NATIVE_BRIDGE_SOURCE', ROOT / 'tools/llama_cpp/riko-native.cpp'),
             f'-DGGML_CUDA={"ON" if backend == "cuda" else "OFF"}',
             f'-DGGML_VULKAN={"ON" if backend == "vulkan" else "OFF"}']
         if sys.platform != 'win32': flags += ['-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON', '-DCMAKE_INSTALL_RPATH=$ORIGIN']

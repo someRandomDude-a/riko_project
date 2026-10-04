@@ -55,7 +55,7 @@ jobs:
       - name: Backend release regression checks
         env:
           RIKO_RELEASE_BUILD: '1'
-        run: python -m pytest tests/test_release_config.py tests/test_llama_native.py tests/test_responses_wire.py tests/test_settings_store.py -q
+        run: python -m pytest tests/test_release_build.py tests/test_release_config.py tests/test_llama_native.py tests/test_responses_wire.py tests/test_settings_store.py -q
       - name: Build both native backends and freeze Python
         run: python tools/release/build.py
       - name: Frontend dependencies and tests
