@@ -1,0 +1,67 @@
+name: Desktop release
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Linux build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev glslc libportaudio2 libsndfile1 libasound2-dev libfuse2 patchelf
+      - name: CUDA build toolkit
+        uses: Jimver/cuda-toolkit@v0.2.24
+        with:
+          cuda: '12.4.1'
+          method: network
+      - name: Windows Vulkan SDK
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://sdk.lunarg.com/sdk/download/1.3.296.0/windows/VulkanSDK-1.3.296.0-Installer.exe -OutFile "$env:RUNNER_TEMP/vulkan.exe"
+          Start-Process "$env:RUNNER_TEMP/vulkan.exe" -ArgumentList '--accept-licenses --default-answer --confirm-command install' -Wait
+          "VULKAN_SDK=C:\VulkanSDK\1.3.296.0" >> $env:GITHUB_ENV
+          "C:\VulkanSDK\1.3.296.0\Bin" >> $env:GITHUB_PATH
+      - name: Python runtime dependencies
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-runtime.txt pyinstaller==6.12.0 pytest
+          python -m pip install EfficientWord-Net --no-deps
+      - name: Backend release regression checks
+        run: python -m pytest tests/test_release_config.py tests/test_llama_native.py tests/test_responses_wire.py tests/test_settings_store.py -q
+      - name: Build both native backends and freeze Python
+        run: python tools/release/build.py
+      - name: Frontend dependencies and tests
+        working-directory: electron
+        run: |
+          npm ci
+          npm test
+          npm run build
+          npm install --no-save --package-lock=false electron-builder@26.0.12
+      - name: Package installers
+        working-directory: electron
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx --no-install electron-builder --config electron-builder.yml --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Riko-${{ runner.os }}-x64
+          path: |
+            electron/release/*.exe
+            electron/release/*.AppImage
+            electron/release/*.deb
+          if-no-files-found: error
