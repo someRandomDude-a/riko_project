@@ -1,0 +1,27 @@
+name: ROCm compile
+# The only CI proof of the opt-in hip bundle: no hosted runner has an AMD GPU, so this shows that it builds as release.yml's
+# hip job builds it and that its modules load against ROCm 7.2.1, never that it runs a model. ggml-hip for twelve GPU targets
+# takes hours, so it runs only when asked (Actions > ROCm compile > Run workflow): after changing the hip recipe, the patch,
+# the pin or the manifest's hip entry, and before an opt-in hip release.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false  # never throw away hours of compiling for a later push
+jobs:
+  hip:
+    name: HIP bridge compile (rocm/dev-ubuntu-22.04 ROCm 7.2.1, no GPU)
+    # The image is pinned by digest (the tag is AMD's, and tags move); release.yml's hip job uses the same one.
+    runs-on: ubuntu-22.04
+    container: rocm/dev-ubuntu-22.04:7.2.1@sha256:42851dac319afce41cf993e25f95005b7f2cd0a0f6abd32ad8f25cd876ec56df
+    timeout-minutes: 330
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: ./.github/actions/hip-bundle
+        with:
+          destination: native-hip/hip

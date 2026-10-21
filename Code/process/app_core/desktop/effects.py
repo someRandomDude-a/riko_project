@@ -4,7 +4,9 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+import threading
 from typing import Any
+import uuid
 
 
 EMOTION_THEMES = {
@@ -79,9 +81,48 @@ class EffectLibrary:
         return max(candidates, key=lambda rule: rule.min_intensity, default=None)
 
     def find_asset(self, name: str) -> Path | None:
-        requested = Path(name)
-        if requested.exists(): return requested
+        """A discovered asset named name (file name or stem), else name in the library's folder when it is a bare file
+        name. The model chose name, so nothing here touches the filesystem; resolve_media checks the result."""
         for paths in self.assets.values():
             for path in paths:
                 if path.name == name or path.stem == name: return path
-        return None
+        return self.directory / name if isinstance(name, str) and name and Path(name).name == name and '\\' not in name else None
+
+
+class EffectsModel:
+    """The overlay's video effect: the one playing (or queued) and the last to finish, with the renderer's acknowledgements.
+    Emits 'effect' and the effect's 'surface_result'. Which effects exist (EffectLibrary) and which files may play
+    (resolve_media) are the desktop tools' collaborators (DesktopServices)."""
+    __slots__ = ('events', '_lock', '_active', '_last')
+
+    def __init__(self, events):
+        self.events, self._lock = events, threading.Lock()
+        self._active = self._last = None
+
+    def snapshot(self):
+        with self._lock: return {'effect': dict(self._active) if self._active else None, 'last_effect': dict(self._last) if self._last else None}
+
+    def trigger(self, name: str, *, opacity: float = 0.65, brightness: float = 1.0, duration: float = 8.0, asset: str | None = None):
+        effect = {'id': str(uuid.uuid4()), 'status': 'queued', 'error': '', "name": name, "opacity": max(0.0, min(1.0, opacity)), "brightness": max(0.0, brightness), "asset": asset, 'duration': duration}
+        with self._lock: self._active = effect
+        self.events.emit("effect", dict(effect))
+        return effect['id']
+
+    def stop(self):
+        with self._lock:
+            if self._active: self._last = {**self._active, 'status': 'cancelled'}
+            self._active = None
+        self.events.emit("effect", None)
+
+    def acknowledge(self, command_id, status, error=''):
+        """The renderer's result for the active effect: playing, completed or error; False for any other (a stale) effect."""
+        with self._lock:
+            item = self._active
+            if not item or item['id'] != command_id: return False
+            if status not in {'playing', 'completed', 'error'}: raise ValueError('Invalid effect result')
+            item['status'], item['error'] = status, error
+            if status in {'completed', 'error'}:
+                self._last = dict(item)
+                self._active = None
+        self.events.emit('surface_result', {'surface': 'effect', 'id': command_id, 'status': status, 'error': error})
+        return True

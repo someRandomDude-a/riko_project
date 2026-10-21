@@ -81,7 +81,8 @@ class ConversationStore:
             if event.type == 'chat.delta': data['text'] += p.get('text', '')
             elif event.type in {'chat.input', 'chat.completed'}: data.update(text=p.get('text', ''), status='completed')
             elif event.type == 'chat.interrupted': data.update(interrupted=True, cutoff=p.get('offset'), text=p.get('text', data['text']))
-            elif event.type in {'chat.cancelled', 'model.error'}: data.update(interrupted=True, status='cancelled' if event.type == 'chat.cancelled' else 'error', error=p.get('error',''))
+            elif event.type == 'chat.cancelled': data.update(interrupted=True, status='cancelled', error=p.get('error',''))
+            elif event.type == 'model.error': data.update(status='error', error=p.get('error','')) # A failure is not an interruption.
             elif event.type == 'chat.interjection':
                 items = data.setdefault('interjections', [])
                 last = items[-1] if items else None

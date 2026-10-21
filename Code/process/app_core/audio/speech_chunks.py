@@ -1,32 +1,14 @@
 """Application-owned, punctuation-prioritized soft word limits for speech."""
 import re
 
+from ..kernel.audio_config import SpeechConfig
 
-DEFAULTS = {'max_words': 40, 'split_window_words': 15,
-            'split_priority': ['.!?', ';:', ',', '\n']}
 WORDS = re.compile(r"\b\w+(?:['’]\w+)*\b")
 
 
-def validate_settings(settings):
-    values = {**DEFAULTS, **settings}
-    for key, low, high in (('max_words', 1, 1000), ('split_window_words', 0, 1000)):
-        value = values[key]
-        if type(value) is not int or not low <= value <= high:
-            raise ValueError(f'speech.{key} must be an integer between {low} and {high}')
-    if values['split_window_words'] > values['max_words']:
-        raise ValueError('speech.split_window_words cannot exceed speech.max_words')
-    groups = values['split_priority']
-    if not isinstance(groups, list) or not groups or any(not isinstance(g, str) or not g for g in groups):
-        raise ValueError('speech.split_priority must be a nonempty list of punctuation groups')
-    characters = ''.join(groups)
-    if any(c not in '.!?;:,\n。！？；：，' for c in characters) or len(set(characters)) != len(characters):
-        raise ValueError('speech.split_priority contains unsupported or repeated punctuation')
-    return values
-
-
 class SpeechChunks:
-    def __init__(self, settings=None):
-        self.settings = validate_settings(settings or {})
+    def __init__(self, settings=SpeechConfig()):  # the speech section, which load_config has checked (SpeechConfig.from_raw)
+        self.settings = settings
         self.pending = ''
 
     def feed(self, delta, final=False):
@@ -34,10 +16,10 @@ class SpeechChunks:
         result = []
         while True:
             words = list(WORDS.finditer(self.pending))
-            limit = self.settings['max_words']
+            limit = self.settings.max_words
             if len(words) <= limit:
                 break
-            lower = max(1, limit - self.settings['split_window_words'])
+            lower = max(1, limit - self.settings.split_window_words)
             # Prefer punctuation within the look-back window ending at the
             # word threshold. If absent, wait for the first future boundary.
             candidates = []
@@ -46,7 +28,7 @@ class SpeechChunks:
                 while count < len(words) and words[count].end() <= position:
                     count += 1
                 if count < lower: continue
-                for rank, group in enumerate(self.settings['split_priority']):
+                for rank, group in enumerate(self.settings.split_priority):
                     if character in group:
                         # Ignore decimal points and intra-word apostrophe-like
                         # punctuation: a boundary needs whitespace/end/quotes.

@@ -34,18 +34,7 @@ test('chat uses only the transcript composer popup, with no recognized-speech du
  const source=fs.readFileSync(new URL('./stream_chat.jsx',import.meta.url),'utf8');
  assert.match(source,/<SpeechPopup inline sending=.*prefix="transcript"/);
  assert.doesNotMatch(source,/popupReply|Recognized speech|Live transcript — provisional/);
- assert.match(source,/visibleMessages/);
+ // Which messages the popup hides, and the busy (409) resend, are stream_chat_reducer.test.mjs behaviour.
  const overlay=fs.readFileSync(new URL('./overlay_feedback.jsx',import.meta.url),'utf8');
  assert.match(overlay,/visible=\{!mini&&replyVisible/);
-});
-test('size changes resize the native window once; rendering stays GPU-enabled',()=>{
- const source=fs.readFileSync(new URL('../main.cjs',import.meta.url),'utf8');
- const transition=source.split('function tweenBounds(')[1].split('function setControlMode(')[0];
- assert.equal((transition.match(/\.setBounds\(/g)||[]).length,1);
- assert.doesNotMatch(transition,/Math\.round|function frame/);
- assert.doesNotMatch(source,/disableHardwareAcceleration|disable-gpu/);
-  assert.match(source,/applyWindowMaterial\(control,mode,fullControlBlur\)/);
-  assert.match(source,/w===control&&controlMode==='full'\)fullControlBlur=enabled/);
- assert.match(source,/appendSwitch\('enable-gpu-rasterization'\)/);
- assert.match(source,/!windowGesture\)control.setIgnoreMouseEvents/);
 });

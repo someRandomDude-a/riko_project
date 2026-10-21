@@ -1,15 +1,21 @@
-"""Python capture, VAD, incremental GPU ASR and turn dispatch are separate workers."""
+"""Python capture, VAD, incremental ASR and turn dispatch are separate workers."""
 import logging
 import queue
 import threading
 import time
-from ..runtime.workers import DaemonExecutor
+from ..kernel.workers import DaemonExecutor
 
-from ..runtime.cancellation import TurnCancelled
+from ..kernel.audio_config import FRAME_BYTES, FRAME_SAMPLES, SAMPLE_RATE
+from ..kernel.cancellation import TurnCancelled
 from ..events.bus import event_bus
+from .echo_gate import EchoGate
 from .voice_segments import VoiceSegments
 
 logger = logging.getLogger(__name__)
+SILENT = bytes(FRAME_BYTES)  # what the wake detector and the segmenter get for a frame of Riko's own echo
+# In echo_gate or stop_only, an utterance among her gated echo with less speech than this is an echo fragment that slipped
+# through, never transcribed: Whisper turns a few frames padded with silence into 'you' or 'Yeah.'.
+MIN_VOICED = .2
 
 
 class VoiceInput:
@@ -18,8 +24,6 @@ class VoiceInput:
         self.frames = queue.Queue(maxsize=256)
         self.jobs = queue.Queue(maxsize=64)
         self.closed = threading.Event()
-        self.model = getattr(session, 'warmed_asr', None)
-        self.asr_lock = getattr(session, 'asr_lock', threading.Lock())
         self.responses = DaemonExecutor(max_workers=1, thread_name_prefix="voice-turn", max_pending=8)
         self._last_overflow = 0
         self._parts = {}
@@ -31,15 +35,15 @@ class VoiceInput:
     def _capture(self):
         try:
             import sounddevice as sd
-            settings = self.session.config.raw.get("voice", {})
-            device = sd.query_devices(settings.get("input_device"), 'input')
+            device_id = self.session.config.voice.input_device
+            device = sd.query_devices(device_id, 'input')
             hostapi = sd.query_hostapis(device['hostapi'])['name']
             self.session.wake.bind_device({'name': device['name'], 'hostapi': hostapi,
-                                          'channels': device['max_input_channels'], 'sample_rate': 16000})
+                                          'channels': device['max_input_channels'], 'sample_rate': SAMPLE_RATE})
             def callback(data, frames, timing, status):
                 self.feed(bytes(data))
-            with sd.RawInputStream(samplerate=16000, channels=1, dtype="int16", blocksize=512,
-                                   device=settings.get("input_device"), callback=callback):
+            with sd.RawInputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", blocksize=FRAME_SAMPLES,
+                                   device=device_id, callback=callback):
                 self.closed.wait()
         except Exception as exc:
             if not self.closed.is_set(): event_bus.publish("voice.error", error=f"Microphone capture failed: {exc}")
@@ -76,7 +80,7 @@ class VoiceInput:
             import numpy as np
             import torch
             from silero_vad import load_silero_vad
-            settings = self.session.config.raw.get("voice", {})
+            voice = self.session.config.voice  # checked once by load_config (VoiceConfig.from_raw), not per frame
             from copy import deepcopy
             warmed = getattr(self.session, 'warmed_vad', None)
             vad = deepcopy(warmed) if warmed is not None else load_silero_vad()
@@ -85,14 +89,13 @@ class VoiceInput:
                 event_bus.publish("voice.started", utterance_id=segmenter.utterance_id, speaking_over=bool(anchor and (len(anchor) < 3 or anchor[2])))
                 return anchor
             def activity(seconds, anchor):
-                if getattr(self.session, '_voice_phase', '') != 'capturing': event_bus.publish('voice.resumed', utterance_id=segmenter.utterance_id)
+                if self.session.status().voice_phase != 'capturing': event_bus.publish('voice.resumed', utterance_id=segmenter.utterance_id)
                 if anchor is not None: self.session.voice_activity(seconds, anchor)
-            segmenter = VoiceSegments(self._enqueue, on_start, activity,
-                pre_roll=float(settings.get("pre_roll_seconds", 1.0)),
-                gap=float(settings.get("transcription_gap_seconds", 0.3)),
-                endpoint=float(settings.get("utterance_end_seconds", 1.0)),
-                max_segment=float(settings.get("max_segment_seconds", 15.0)),
-                partial_interval=float(settings.get('live_transcript_interval_seconds', 2.0)))
+            segmenter = VoiceSegments(self._enqueue, on_start, activity, pre_roll=voice.pre_roll_seconds,
+                gap=voice.transcription_gap_seconds, endpoint=voice.utterance_end_seconds, max_segment=voice.max_segment_seconds,
+                partial_interval=voice.live_transcript_interval_seconds)
+            # voice.barge_in: the default never looks at playback; the others gate frames heard while Riko's audio plays.
+            gate = EchoGate(voice, self.session.speech.playback if voice.barge_in != 'full_duplex' else None)
             last_level = overflow = 0.0
             if self.closed.is_set(): return
             event_bus.publish("voice.ready")
@@ -104,25 +107,27 @@ class VoiceInput:
                     segmenter.reset()
                     vad.reset_states()
                     event_bus.publish("voice.error", error="Microphone processing fell behind; recording resumed")
-                for index in range(0, len(data) - 1023, 1024):
-                    frame = data[index:index + 1024]
+                for index in range(0, len(data) - FRAME_BYTES + 1, FRAME_BYTES):
+                    frame = data[index:index + FRAME_BYTES]
                     samples = np.frombuffer(frame, dtype='<i2').astype('float32') / 32768
+                    rms = float(np.sqrt(np.mean(samples ** 2)))
                     if timestamp - last_level >= 0.05:
-                        event_bus.publish("voice.level", rms=float(np.sqrt(np.mean(samples ** 2))), peak=float(np.max(np.abs(samples))))
+                        event_bus.publish("voice.level", rms=rms, peak=float(np.max(np.abs(samples))))
                         last_level = timestamp
                     if not self.session.state.mic_enabled:
-                        with self.session._voice_lock: self.session._user_speaking = False
+                        self.session.set_user_speaking(False)
                         segmenter.reset()
                         vad.reset_states()
                         continue
-                    with torch.inference_mode(): probability = float(vad(torch.from_numpy(samples), 16000))
-                    speaking = probability >= float(settings.get("vad_threshold", 0.5))
-                    with self.session._voice_lock: self.session._user_speaking = speaking
+                    with torch.inference_mode(): probability = float(vad(torch.from_numpy(samples), SAMPLE_RATE))
+                    speaking, echo = gate.decide(probability, rms, timestamp)
+                    heard = SILENT if echo else frame  # her echo never becomes an utterance's audio or pre-roll
+                    self.session.set_user_speaking(speaking)
                     # A tool may claim speaking priority while an utterance that
                     # began before the reply is still being captured.
-                    if segmenter.utterance_id and segmenter.anchor is None and time.monotonic() < self.session._assertive_until:
+                    if segmenter.utterance_id and segmenter.anchor is None and self.session.status().speaking_priority:
                         segmenter.anchor = self.session.voice_anchor()
-                    self.session.wake.feed(frame, speaking)
+                    self.session.wake.feed(heard, speaking)
                     if self.session.wake.calibrating or getattr(self.session.wake, 'testing', False):
                         segmenter.reset()
                         continue
@@ -133,7 +138,7 @@ class VoiceInput:
                         # Detector-only audio must never become transcription pre-roll.
                         segmenter.reset()
                         continue
-                    segmenter.feed(frame, speaking, timestamp)
+                    segmenter.feed(heard, speaking, timestamp)
         except Exception as exc:
             logger.exception("Voice detection failed")
             if not self.closed.is_set(): event_bus.publish("voice.error", error=str(exc))
@@ -147,24 +152,12 @@ class VoiceInput:
                 if self.session.wake.calibrating or self.session.wake.testing:
                     self._parts.pop(segment.utterance_id, None)
                     continue
-                import numpy as np
-                from faster_whisper import WhisperModel
-                config = self.session.config.raw.get("voice", {})
                 if not segment.provisional: event_bus.publish('voice.transcribing', utterance_id=segment.utterance_id)
                 parts = self._parts.setdefault(segment.utterance_id, [])
                 partial_text = ''
-                if segment.pcm:
-                    audio = np.frombuffer(segment.pcm, dtype='<i2').astype('float32') / 32768
-                    with self.asr_lock:
-                        if self.model is None:
-                            self.model = getattr(self.session, 'warmed_asr', None)
-                            if self.model is None:
-                                self.model = WhisperModel(config.get("asr_model", "distil-small.en"),
-                                    device=config.get("asr_device", "cuda"), compute_type=config.get("asr_compute_type", "int8_float16"))
-                                self.session.warmed_asr = self.model
-                        segments, _ = self.model.transcribe(audio, beam_size=1, vad_filter=False,
-                                                           condition_on_previous_text=False)
-                        text = " ".join(item.text.strip() for item in segments).strip()
+                if segment.pcm and not self._echo_fragment(segment):
+                    # The session's one Whisper model, shared with warmup and Discord (audio/asr.py AsrService).
+                    text = self.session.transcribe(segment.pcm, beam_size=1, vad_filter=False, condition_on_previous_text=False)
                     if text:
                         if segment.provisional: partial_text = text
                         else: parts.append(text)
@@ -177,15 +170,11 @@ class VoiceInput:
                     if text:
                         observer = getattr(getattr(self.session, 'state', None), 'observe_input', None)
                         if observer: observer('microphone', text, message_id=segment.utterance_id)
-                        # Preserve interjections immediately, even if the reply
-                        # dispatch worker is still waiting on an earlier turn.
-                        accepted = True
-                        if segment.anchor:
-                            accepted = self.session.voice_transcript(text, segment.started_at, segment.ended_at, segment.anchor)
-                        # Follow actual VAD cancellation, not a threshold re-evaluated
-                        # after slow ASR or speaking-priority expiry.
-                        if accepted and (segment.anchor is None or self.session.user_interrupted(segment.anchor)):
-                            self.responses.submit(self._dispatch, text, segment)
+                        # Place words spoken during a reply now, even if the dispatch worker is still waiting on an
+                        # earlier turn; the session says whether they need a reply (SessionManager.voice_transcript).
+                        disposition = self.session.voice_transcript(text, segment.started_at, segment.ended_at, segment.anchor) if segment.anchor else 'fresh'
+                        if disposition == 'fresh': self.responses.submit(self._dispatch, text, segment)
+                        elif disposition == 'reply': self.responses.submit(self._dispatch, text, segment, segment.anchor[0])
             except Exception as exc:
                 logger.exception("Transcription failed")
                 self._parts.pop(segment.utterance_id, None)
@@ -195,20 +184,22 @@ class VoiceInput:
                     with self._partial_lock: self._partial_pending.discard(segment.utterance_id)
                 self.jobs.task_done()
 
-    def _dispatch(self, text, segment):
+    def _echo_fragment(self, segment):
+        """A segment of an utterance with under MIN_VOICED of speech whose audio holds frames gated as her echo (SILENT)."""
+        if segment.speech_seconds >= MIN_VOICED or self.session.config.voice.barge_in == 'full_duplex': return False
+        pcm = segment.pcm
+        return any(pcm[index:index + FRAME_BYTES] == SILENT for index in range(0, len(pcm) - FRAME_BYTES + 1, FRAME_BYTES))
+
+    def _abandoned(self):
+        return self.closed.is_set() or self.session.wake.calibrating or getattr(self.session.wake, 'testing', False)
+
+    def _dispatch(self, text, segment, reply_to=None):
         try:
-            if self.session.wake.calibrating or self.session.wake.testing: return
-            anchor = segment.anchor
-            # Waiting/generation must never block the ASR or microphone workers.
-            while not self.closed.is_set():
-                if self.session.wake.calibrating or self.session.wake.testing: return
-                if self.session._turn_lock.acquire(timeout=0.1):
-                    self.session._turn_lock.release()
-                    if anchor and anchor[0] != self.session._active_turn:
-                        event_bus.publish("voice.error", error="Interrupted turn changed before reply dispatch; transcript was preserved")
-                        return
-                    self.session.respond(text, record_user=anchor is None, origin={'source':'microphone', 'message_id':segment.utterance_id})
-                    return
+            if self._abandoned(): return
+            # respond() waits for a running turn or initiative on this worker (never the ASR or microphone workers), so a
+            # finished utterance is answered after it instead of being refused and lost. reply_to redoes a reply it cut.
+            self.session.respond(text, record_user=reply_to is None, reply_to=reply_to, wait=self._abandoned,
+                origin={'source':'microphone', 'message_id':segment.utterance_id})
         except TurnCancelled:
             pass
         except Exception as exc:

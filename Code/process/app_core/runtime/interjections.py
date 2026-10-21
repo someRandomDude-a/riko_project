@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timezone
 from dataclasses import dataclass
 
-from ..conversation.messages import ChatMessage
+from ..kernel.messages import ChatMessage
 
 
 @dataclass

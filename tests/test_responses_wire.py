@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from process.app_core.conversation.messages import ChatMessage, ToolCall
+from process.app_core.kernel.messages import ChatMessage, ToolCall
 from process.app_core.inference.responses import response_input, response_tools, template_messages, assemble_responses, sse_events
 from process.app_core.inference.llama_context import LlamaContextProvider
 
@@ -69,6 +69,18 @@ def test_qwen_layout_keeps_tool_results_and_merges_leading_systems():
     assert items[-1]['output'].endswith('Confirmed result')
 
 
+def test_tool_loop_requests_extend_the_previous_folded_request():
+    # Each tool iteration appends a reply, a result and a fresh observation; the earlier observation stays on its input.
+    first = [ChatMessage('system', 'Instructions'), ChatMessage('user', 'Earlier'), ChatMessage('assistant', 'Past answer'),
+        ChatMessage('system', 'Relevant memories: blue'), ChatMessage('user', 'Question'), ChatMessage('system', 'Observation 1')]
+    second = [*first, ChatMessage('assistant', '', tool_calls=[ToolCall('id', 'lookup', {})]),
+        ChatMessage('tool', 'Confirmed result', tool_call_id='id'), ChatMessage('system', 'Observation 2')]
+    before, after = response_input(template_messages(first)), response_input(template_messages(second))
+    assert after[:len(before)] == before and [item.get('role') for item in after].count('system') == 1
+    assert 'Observation 1' in before[-1]['content'] and before[-1]['content'].endswith('Question')
+    assert after[-1]['type'] == 'function_call_output' and 'Observation 2' in after[-1]['output'] and 'Observation 1' not in after[-1]['output']
+
+
 def test_responses_text_reasoning_and_tools_are_separate_and_word_streamed():
     text, reasoning = [], []
     result = assemble_responses([
@@ -107,3 +119,23 @@ def test_token_limit_completion_and_standard_sse_comments_and_named_events():
 def test_server_errors_show_native_cause_and_missing_endpoint_never_falls_back(status,message):
     response = httpx.Response(status, json={'error':{'message':message}})
     with pytest.raises(RuntimeError, match=message): LlamaContextProvider._check_response(response)
+
+
+def test_turn_recall_folds_into_the_input_even_when_no_past_turn_precedes_it():
+    # The system prompt stays byte-identical across turns (KV cache) whether or not packing dropped every past turn.
+    messages = [ChatMessage('system', 'Stable'), ChatMessage('system', 'Relevant memories: blue', context_kind='optional'), ChatMessage('user', 'Hi')]
+    system, user = template_messages(messages)
+    assert system.content == 'Stable' and 'Relevant memories: blue' in user.content and user.content.endswith('Hi')
+
+
+def test_consecutive_turns_of_one_role_are_joined_for_strict_templates():
+    # History keeps the user's message of a stopped, failed or unheard turn, so two user messages can follow each other;
+    # Gemma and older Mistral templates raise unless roles alternate. A tool-calling assistant message is never merged.
+    call = ChatMessage('assistant', '', tool_calls=[ToolCall('c1', 'lookup', {})])
+    messages = [ChatMessage('system', 'Stable'), ChatMessage('user', 'User: Say hello'), ChatMessage('user', 'User: Never mind, a story?'),
+        ChatMessage('assistant', 'Once upon'), ChatMessage('assistant', 'a time.'), ChatMessage('user', 'User: Look it up'),
+        call, ChatMessage('tool', 'found', tool_call_id='c1'), ChatMessage('assistant', 'Here it is.')]
+    roles = [(message.role, message.content) for message in template_messages(messages)]
+    assert roles == [('system', 'Stable'), ('user', 'User: Say hello\n\nUser: Never mind, a story?'), ('assistant', 'Once upon\n\na time.'),
+        ('user', 'User: Look it up'), ('assistant', ''), ('tool', 'found'), ('assistant', 'Here it is.')]
+    assert [message.content for message in messages[1:3]] == ['User: Say hello', 'User: Never mind, a story?']  # originals untouched

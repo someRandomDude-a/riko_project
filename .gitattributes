@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Shell scripts must keep LF on Windows checkouts, or bash rejects "set -o pipefail\r".
+*.sh text eol=lf

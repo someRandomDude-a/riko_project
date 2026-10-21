@@ -11,6 +11,17 @@ from .bot import Job
 from .config import BASIC_SETTINGS
 from .views import ConfirmView
 
+GPU_KEYS = ('key', 'name', 'backend', 'memory_kind', 'memory_scope', 'llm', 'total_mib', 'used_mib', 'free_mib', 'owned_mib', 'other_mib',
+            'attribution_complete')
+
+
+def resource_summary(result):
+    """/resources: GPU telemetry without process ids or device identifiers beyond the row key. memory_kind 'unified' with
+    memory_scope 'process' (Apple Metal) means used is this app's Python process, not the whole GPU; main_key names the
+    row the model runs on."""
+    return {'available': result.get('available'), 'source': result.get('source'), 'main_key': result.get('main_key'),
+        'gpus': [{key: gpu.get(key) for key in GPU_KEYS if key in gpu} for gpu in result.get('gpus', [])]}
+
 
 class CompanionCommands(commands.Cog):
     def __init__(self, bot): self.bot = bot
@@ -112,6 +123,8 @@ class CompanionCommands(commands.Cog):
     @app_commands.command(name='tool_policy', description='Require or remove approval for one exact registered tool name.')
     async def tool_policy(self, interaction: discord.Interaction, name: str, required: bool):
         self.require(interaction, admin=True)
+        # Removing approval lets the model run that tool unattended; only the desktop owner can confirm it.
+        if not required: raise ValueError('Removing approval must be confirmed in the Riko desktop window (Settings).')
         await interaction.response.defer(ephemeral=True)
         await self.bot.backend.request('PUT', '/api/tools/approvals', body={'policy': {name: required}})
         await self.reply(interaction, f'Approval requirement for {name}: {required}.')
@@ -184,10 +197,7 @@ class CompanionCommands(commands.Cog):
         self.require(interaction, admin=True)
         await interaction.response.defer(ephemeral=True)
         result = await self.bot.backend.request('GET', '/api/resources/gpu')
-        allowed = ('name', 'total_mib', 'used_mib', 'free_mib', 'owned_mib', 'other_mib')
-        summary = {'available': result.get('available'), 'gpus': [
-            {key: gpu.get(key) for key in allowed if key in gpu} for gpu in result.get('gpus', [])]}
-        await self.reply(interaction, json.dumps(summary, ensure_ascii=False, indent=2))
+        await self.reply(interaction, json.dumps(resource_summary(result), ensure_ascii=False, indent=2))
 
     @app_commands.command(name='animation', description='Read/preview the desktop animation library; Discord has no avatar renderer.')
     async def animation(self, interaction: discord.Interaction, preview_id: str | None = None):

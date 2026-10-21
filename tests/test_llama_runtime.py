@@ -14,9 +14,10 @@ def native(**kwargs):
 
 
 @pytest.mark.parametrize('settings', [
-    {'n_ctx': -1}, {'n_threads': 0}, {'flash_attn': 'true'}, {'n_ubatch': 1024},
-    {'type_k': 'q4_k'}, {'type_v': 'q8_0'}, {'tensor_split': [float('nan')]},
-    {'tensor_split': [0, 0]}, {'cache_size_mb': -1}, {'split_mode': 'invalid'},
+    {'n_ctx': -1}, {'n_threads': 0}, {'flash_attn': 'true'}, {'flash_attn': 1}, {'n_ubatch': 1024},
+    {'type_k': 'q4_k'}, {'type_v': 'q8_0', 'flash_attn': 'off'}, {'type_v': 'q8_0', 'flash_attn': False},
+    {'tensor_split': [float('nan')]}, {'n_gpu_layers': -3},
+    {'tensor_split': [0, 0]}, {'cache_size_mb': -1}, {'split_mode': 'invalid'}, {'split_mode': 'tensor'},
 ])
 def test_invalid_native_settings(settings):
     with pytest.raises(ValueError): validate_runtime(native(**settings))
@@ -38,7 +39,7 @@ def test_yaml_native_settings_and_paths(tmp_path):
     runtime = load_config(config).runtime
     assert runtime.model_path == tmp_path/'models/example.gguf'
     assert runtime.n_ctx == 16384 and runtime.n_ubatch == 256
-    assert runtime.flash_attn and runtime.type_v == 'q8_0'
+    assert runtime.flash_attn == 'on' and runtime.type_v == 'q8_0'
     assert runtime.cache_size_mb == 256
 
 
@@ -71,3 +72,37 @@ def test_split_gguf_downloads_all_shards_at_same_commit(monkeypatch):
 def test_hf_requires_unambiguous_filename(filename):
     with pytest.raises(ValueError):
         validate_runtime(replace(native(), model_path=None, hf_repo_id='owner/repo', hf_filename=filename))
+
+
+@pytest.mark.parametrize('value, expected', [(True, 'on'), (False, 'off'), ('auto', 'auto'), ('on', 'on'), ('off', 'off')])
+def test_flash_attention_is_tri_state_and_keeps_yaml_booleans(value, expected):
+    from process.app_core.inference.llama_context import native_arguments
+    config = native(flash_attn=value)
+    validate_runtime(config)
+    assert config.flash_attn == expected
+    args = native_arguments(config, Path('model.gguf'))
+    assert args[args.index('--flash-attn') + 1] == expected
+
+
+def test_flash_attention_defaults_to_auto_and_allows_quantized_v():
+    config = native(type_k='q8_0', type_v='q8_0')
+    validate_runtime(config)
+    assert config.flash_attn == 'auto'
+
+
+@pytest.mark.parametrize('layers, fit', [(-1, 'on'), (-2, 'off'), (0, 'off'), (20, 'off')])
+def test_only_automatic_layer_count_lets_llama_cpp_fit_memory(layers, fit):
+    from process.app_core.inference.llama_context import native_arguments
+    config = native(n_gpu_layers=layers)
+    validate_runtime(config)
+    args = native_arguments(config, Path('model.gguf'))
+    assert args[args.index('--n-gpu-layers') + 1] == str(layers)
+    assert args[args.index('--fit') + 1] == fit
+
+
+def test_row_split_loads_from_yaml_but_the_native_provider_refuses_it(tmp_path):
+    from process.app_core.inference.llama_native import InProcessLlamaProvider
+    path = tmp_path / 'character_config.yaml'
+    path.write_text('runtime:\n  provider: llama_cpp\n  model_path: model.gguf\n  split_mode: row\n')
+    runtime = load_config(path).runtime  # Settings can still open this file
+    with pytest.raises(ValueError, match="split_mode 'row' is not available"): InProcessLlamaProvider(runtime)

@@ -1,16 +1,2 @@
-import logging
-import threading
-
-logger = logging.getLogger(__name__)
-
-
-def close_bounded(resource, timeout=1):
-    close = getattr(resource, 'close', None)
-    if not close: return
-    done = threading.Event()
-    def run():
-        try: close()
-        except Exception: logger.exception('Resource cleanup failed: %s', type(resource).__name__)
-        finally: done.set()
-    threading.Thread(target=run, daemon=True, name='resource-cleanup').start()
-    if not done.wait(timeout): logger.warning('Cleanup deadline exceeded: %s', type(resource).__name__)
+"""Shim: moved to kernel/lifecycle.py. Old imports keep working, with the same objects, for one release; import from kernel."""
+from ..kernel.lifecycle import close_bounded, run_bounded  # noqa: F401

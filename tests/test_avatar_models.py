@@ -1,19 +1,10 @@
-import json
 from pathlib import Path
-import struct
 
 import pytest
 
 from process.app_core.desktop.avatar_models import AvatarModels, inspect_model
 from process.app_core.configuration.settings_store import SettingsStore
-
-
-def vrm_bytes(version='vrm1', uri=None):
-    extension = {'specVersion':'1.0' if version == 'vrm1' else '0.0', 'humanoid':{'humanBones':{'hips':{'node':0}} if version == 'vrm1' else [{'bone':'hips','node':0}]}}
-    document = {'asset':{'version':'2.0'}, 'extensions':{'VRMC_vrm' if version == 'vrm1' else 'VRM':extension}, 'nodes':[{}]}
-    if uri: document['images'] = [{'uri':uri}]
-    data = json.dumps(document).encode(); data += b' ' * (-len(data) % 4)
-    return struct.pack('<4sII', b'glTF', 2, len(data)+20)+struct.pack('<II',len(data),0x4E4F534A)+data
+from conftest import vrm_bytes  # shared with the desktop API tests
 
 
 def test_vrm_import_copies_originals_and_never_overwrites_colliding_names(tmp_path):

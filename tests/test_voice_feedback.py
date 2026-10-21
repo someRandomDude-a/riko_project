@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from process.app_core.audio.wake_word import WakeWord
 from process.app_core.events.bus import event_bus
 from process.app_core.audio.voice_segments import VoiceSegments, Segment
+from process.app_core.kernel.audio_config import audio_sections
+from process.app_core.configuration.paths import DataPaths
 
 
 def test_activation_and_expiry_publish_status_without_polling(tmp_path,monkeypatch):
@@ -13,7 +15,7 @@ def test_activation_and_expiry_publish_status_without_polling(tmp_path,monkeypat
         def cancel(self):self.cancelled=True
     monkeypatch.setattr('process.app_core.audio.wake_word.threading.Timer',Timer)
     monkeypatch.setattr('process.app_core.audio.wake_word.time.monotonic',lambda:now[0])
-    config=SimpleNamespace(root=tmp_path,character_name='Riko',raw={'voice':{'mode':'manual','follow_up_seconds':10}})
+    config=SimpleNamespace(root=tmp_path,paths=DataPaths.at(tmp_path),character_name='Riko',**audio_sections({'voice':{'mode':'manual','follow_up_seconds':10}}))
     wake=WakeWord(config)
     off=event_bus.subscribe(events.append)
     try:
@@ -48,11 +50,10 @@ def test_partial_asr_revisions_replace_text_and_never_dispatch_a_reply_early(mon
     from process.app_core.audio.voice_input import VoiceInput
     monkeypatch.setitem(sys.modules,'faster_whisper',SimpleNamespace(WhisperModel=object))
     voice=VoiceInput.__new__(VoiceInput)
-    voice.closed=threading.Event();voice.jobs=queue.Queue();voice.asr_lock=threading.Lock()
+    voice.closed=threading.Event();voice.jobs=queue.Queue()
     voice._partial_lock=threading.Lock();voice._partial_pending=set();voice._parts={}
     outputs=iter(['hel','hello','hello there'])
-    voice.model=SimpleNamespace(transcribe=lambda *args,**kwargs:([SimpleNamespace(text=next(outputs))],None))
-    voice.session=SimpleNamespace(wake=SimpleNamespace(calibrating=False,testing=False),config=SimpleNamespace(raw={}))
+    voice.session=SimpleNamespace(wake=SimpleNamespace(calibrating=False,testing=False),config=SimpleNamespace(raw={},**audio_sections({})),transcribe=lambda pcm,**options:next(outputs))
     replies=[]
     def submit(fn,text,segment):replies.append(text);voice.closed.set()
     voice.responses=SimpleNamespace(submit=submit)

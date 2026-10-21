@@ -17,19 +17,33 @@ class BotSettings:
     admins: frozenset = frozenset()
     users: frozenset = frozenset()
     channels: frozenset = frozenset()
-    backend_url: str = 'http://127.0.0.1:8765'
+    backend_url: str = 'http://127.0.0.1:8765'  # from_env: Discord_backend_url, else the backend's RIKO_PORT (api_guard.backend_url)
     ffmpeg: str = 'ffmpeg'
     camera_url: str = ''
     sync_guild: int | None = None
     allow_dms: bool = True
     admin_actions: bool = True
 
+    # Every key from_env reads; environment overrides are matched to them without case (Windows upper-cases names).
+    KEYS = ('Discord_backend_url', 'RIKO_PORT', 'Discord_camera_url', 'Discord_bot_token', 'Discord_admins', 'Discord_allowed_users',
+        'Discord_Channel_whitelist', 'Discord_ffmpeg', 'Discord_sync_guild')
+
+    @classmethod
+    def overrides(cls, environ):
+        """The process environment's values for KEYS, under their own spelling whatever case the OS reports."""
+        canonical = {key.casefold(): key for key in cls.KEYS}
+        return {canonical[name.casefold()]: value for name, value in environ.items() if name.casefold() in canonical}
+
     @classmethod
     def from_env(cls, root, env):
-        backend = env.get('Discord_backend_url', 'http://127.0.0.1:8765').rstrip('/')
+        from ...desktop.api_guard import backend_url
+        # The launcher passes its own backend's address here, so a started worker reaches it whatever the .env says.
+        backend = (env.get('Discord_backend_url') or backend_url(env)).rstrip('/')
         parsed = urlsplit(backend)
-        if parsed.scheme != 'http' or parsed.hostname not in {'127.0.0.1', 'localhost', '::1'} or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
-            raise ValueError('Discord backend must be a loopback http:// URL without credentials or a path')
+        if parsed.scheme != 'http' or parsed.hostname not in {'127.0.0.1', 'localhost'} or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+            raise ValueError('Discord backend must be http://127.0.0.1:<port> without credentials or a path')
+        # Always 127.0.0.1: 'localhost' can resolve to ::1, where another account's listener would receive the API token.
+        backend = 'http://127.0.0.1' + (f':{parsed.port}' if parsed.port else '')
         camera = env.get('Discord_camera_url', '').strip()
         if camera:
             url = urlsplit(camera)

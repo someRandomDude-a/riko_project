@@ -5,6 +5,9 @@ from concurrent.futures import Future
 from types import SimpleNamespace
 
 from process.app_core.audio.speech import AudioClip, SpeechQueue
+from process.app_core.inference.provider import BaseProvider
+from process.app_core.kernel.audio_config import audio_sections
+from process.app_core.configuration.paths import DataPaths
 
 
 def test_master_volume_scales_pcm_without_changing_duration():
@@ -77,7 +80,7 @@ def test_missing_sovits_keeps_chat_alive_and_next_reply_recovers(tmp_path, monke
     from process.app_core.conversation.chat import ChatService
     from process.app_core.desktop.state import DesktopState
     from process.app_core.events.bus import event_bus
-    from process.app_core.conversation.messages import ChatMessage, ModelResponse
+    from process.app_core.kernel.messages import ChatMessage, ModelResponse
     from process.app_core.runtime.session import SessionManager
     from process.app_core.runtime.warmup import warm_components
 
@@ -99,13 +102,13 @@ def test_missing_sovits_keeps_chat_alive_and_next_reply_recovers(tmp_path, monke
         def write(self, pcm): played.append(pcm)
         def abort(self): pass
     monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(RawOutputStream=Output))
-    class Provider:
+    class Provider(BaseProvider):
         def generate(self, messages, **kwargs):
             text = 'Here is your answer.'
             kwargs['on_delta'](text)
             return ModelResponse(ChatMessage('assistant', text))
         def close(self): pass
-    config = SimpleNamespace(root=tmp_path, character_name='Riko', raw={}, tools=SimpleNamespace(max_iterations=8))
+    config = SimpleNamespace(root=tmp_path, paths=DataPaths.at(tmp_path), character_name='Riko', raw={}, tools=SimpleNamespace(max_iterations=8), **audio_sections({}))
     chat = ChatService(Provider(), system_prompt='test')
     session = SessionManager(config, chat, DesktopState())
     events, failed, completed = [], threading.Event(), threading.Event()
@@ -191,9 +194,11 @@ def test_wake_cue_is_queued_on_existing_playback_lane(monkeypatch):
     monkeypatch.setattr(SpeechQueue, '_play_clip', clip)
     monkeypatch.setattr(SpeechQueue, '_receive', receive)
     monkeypatch.setattr(SpeechQueue, '_play', play)
-    speech = SpeechQueue(SimpleNamespace(raw={}), SimpleNamespace(audio_enabled=True))
+    speech = SpeechQueue(SimpleNamespace(raw={}, **audio_sections({})), SimpleNamespace(audio_enabled=True))
     unsubscribe = event_bus.subscribe(lambda event: finished.set() if event.type == 'speech.completed' else None)
     try:
+        from process.app_core.audio.echo_gate import PlaybackLevel
+        assert isinstance(speech.playback, PlaybackLevel)  # each queue records what it writes (voice.barge_in)
         assert speech.submit_clip('cue.wav')
         assert started.wait(1)
         assert speech.submit('Reply.', 'turn')
@@ -205,3 +210,50 @@ def test_wake_cue_is_queued_on_existing_playback_lane(monkeypatch):
         unsubscribe()
         speech.close()
         speech.worker.join(timeout=1)
+
+
+def test_each_written_block_records_its_level_and_duration_for_the_echo_gate():
+    import struct
+    speech = SpeechQueue.__new__(SpeechQueue)
+    speech.state = SimpleNamespace(audio_enabled=True, audio_volume=.5)
+    speech.closed = threading.Event()
+    recorded = []
+    speech.playback = SimpleNamespace(wrote=lambda rms, seconds, latency, run: recorded.append((round(rms, 4), seconds, latency, run)))
+    chunks = queue.Queue()
+    chunks.put(struct.pack('<4h', 16000, -16000, 16000, -16000))
+    chunks.put(struct.pack('<2h', 8000, -8000))
+    future = Future(); future.set_result(.1)
+    written = []
+    output = SimpleNamespace(write=lambda pcm: written.append(len(recorded)), latency=.05)
+    speech._write_audio(output, 'test', 'turn', chunks, future, threading.Event(), 32000)
+    # The scaled PCM (master volume .5), recorded just before each write reaches the device.
+    # Each block names its reply, so the echo gate learns her echo afresh for every reply.
+    assert recorded == [(round(8000 / 32768, 4), 4 / 32000, .05, 'turn'), (round(4000 / 32768, 4), 2 / 32000, .05, 'turn')] and written == [1, 2]
+    assert SpeechQueue.playback is None  # a queue built without __init__ (as above) records nothing
+
+
+def test_wake_cue_blocks_are_recorded_too(tmp_path, monkeypatch):
+    import wave
+    path = tmp_path / 'cue.wav'
+    with wave.open(str(path), 'wb') as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(16000)
+        output.writeframes(b'\x00\x20' * 1600)
+    class Output:
+        latency = .02
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def write(self, pcm): pass
+        def abort(self): pass
+    monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Output))
+    speech = SpeechQueue.__new__(SpeechQueue)
+    speech.closed, speech._response_lock, speech._output = threading.Event(), threading.Lock(), None
+    speech.state = SimpleNamespace(audio_enabled=True)
+    recorded = []
+    speech.playback = SimpleNamespace(wrote=lambda rms, seconds, latency, run: recorded.append((round(rms, 4), seconds, latency, run)))
+    clip = AudioClip(path, .5, 3)
+    speech._play_clip(clip, threading.Event())
+    assert [seconds for _, seconds, _, _ in recorded] == [512 / 16000] * 3 + [64 / 16000]
+    assert all(rms == .125 and latency == .02 and run is clip for rms, _, latency, run in recorded)  # the cue is its own run

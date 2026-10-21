@@ -4,9 +4,10 @@ import threading
 import time
 import logging
 from dataclasses import dataclass, field
-from ..runtime.workers import DaemonExecutor
+from ..kernel.workers import DaemonExecutor
 
 from ..events.bus import event_bus
+from .echo_gate import PlaybackLevel, float_rms, pcm16_rms
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +22,14 @@ class AudioClip:
 
 
 class SpeechQueue:
+    playback = None  # PlaybackLevel: what was written, and when, for voice.barge_in's echo gate (audio/echo_gate.py)
+
     def __init__(self, config, state):
         self.config, self.state = config, state
+        self.playback = PlaybackLevel()
         self.queue = queue.Queue(maxsize=64)
         self.closed = threading.Event()
-        concurrency = config.raw.get("sovits_ping_config", {}).get("max_in_flight_requests", 4)
-        if type(concurrency) is not int or concurrency < 1:
-            raise ValueError("sovits_ping_config.max_in_flight_requests must be a positive integer")
-        self.requests = DaemonExecutor(max_workers=concurrency, thread_name_prefix="tts-request")
+        self.requests = DaemonExecutor(max_workers=config.sovits.max_in_flight_requests, thread_name_prefix="tts-request")
         self._submit_lock = threading.Lock()
         self._interrupt = threading.Event()
         self._futures = set()
@@ -47,17 +48,19 @@ class SpeechQueue:
         with self._submit_lock:
             if self.closed.is_set(): return False
             if self._failed_turn == turn_id: return False
-            if self.queue.full():
-                event_bus.publish("speech.error", turn_id=turn_id, error="Speech queue full")
-                return False
-            chunks = queue.Queue(maxsize=256)
-            interrupt = self._interrupt
-            future = self.requests.submit(self._receive, text, chunks, interrupt, turn_id)
-            self._futures.add(future)
-            def finished(completed):
-                with self._submit_lock: self._futures.discard(completed)
-            # A done callback can run inline; register it outside the submit lock.
-            self.queue.put_nowait((text, turn_id, chunks, future, interrupt, start_offset, end_offset))
+            full = self.queue.full()
+            if not full:
+                chunks = queue.Queue(maxsize=256)
+                interrupt = self._interrupt
+                future = self.requests.submit(self._receive, text, chunks, interrupt, turn_id)
+                self._futures.add(future)
+                def finished(completed):
+                    with self._submit_lock: self._futures.discard(completed)
+                self.queue.put_nowait((text, turn_id, chunks, future, interrupt, start_offset, end_offset))
+        # Publish and register callbacks outside the submit lock: both can run listeners inline.
+        if full:
+            event_bus.publish("speech.error", turn_id=turn_id, error="Speech queue full", queued=False)
+            return False
         future.add_done_callback(finished)
         return True
 
@@ -78,10 +81,11 @@ class SpeechQueue:
         clip = AudioClip(path, volume, max_seconds, dict(context or {}))
         with self._submit_lock:
             if self.closed.is_set(): return False
-            if self.queue.full():
-                event_bus.publish('wake.feedback.error', asset='audio', error='Audio queue full; wake cue skipped')
-                return False
-            self.queue.put_nowait((clip, None, None, None, self._interrupt, 0, None))
+            full = self.queue.full()
+            if not full: self.queue.put_nowait((clip, None, None, None, self._interrupt, 0, None))
+        if full:
+            event_bus.publish('wake.feedback.error', asset='audio', error='Audio queue full; wake cue skipped')
+            return False
         event_bus.publish('wake.feedback.queued', **clip.context)
         return True
 
@@ -145,7 +149,9 @@ class SpeechQueue:
                         output.abort()
                         event_bus.publish('wake.feedback.cancelled', **clip.context)
                         return
-                    output.write(pcm[start:start + 512] * getattr(self.state, 'audio_volume', 1.0))
+                    block = pcm[start:start + 512] * getattr(self.state, 'audio_volume', 1.0)
+                    if self.playback is not None: self.playback.wrote(float_rms(block), len(block) / rate, getattr(output, 'latency', 0.0), run=clip)
+                    output.write(block)
                 event_bus.publish('wake.feedback.completed', **clip.context)
             finally:
                 with self._response_lock:
@@ -196,7 +202,7 @@ class SpeechQueue:
                 raise RuntimeError('GPT-SoVITS returned no audio')
             interrupt.wait(.02)
         import sounddevice as sd
-        rate = int(self.config.raw.get("sovits_ping_config", {}).get("sample_rate", 32000))
+        rate = self.config.sovits.sample_rate
         with sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16") as output:
             with self._response_lock: self._output = (output, interrupt)
             try:
@@ -225,7 +231,11 @@ class SpeechQueue:
                         event_bus.publish("speech.started", turn_id=turn_id, text=text,
                                           start_offset=start_offset, end_offset=end_offset,
                                           started_at=time.monotonic())
-                    output.write(scale_pcm16(pending[:size], getattr(self.state, 'audio_volume', 1.0)))
+                    data = scale_pcm16(pending[:size], getattr(self.state, 'audio_volume', 1.0))
+                    # Recorded just before it can sound: the microphone side compares its frames with it, and learns her echo
+                    # level afresh for each reply (run=turn_id; echo_gate.py).
+                    if self.playback is not None: self.playback.wrote(pcm16_rms(data), size / 2 / rate, getattr(output, 'latency', 0.0), run=turn_id)
+                    output.write(data)
                     audio_bytes += size
                     pending = pending[size:]
             if self.closed.is_set() or interrupt.is_set(): output.abort()

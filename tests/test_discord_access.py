@@ -5,11 +5,12 @@ from process.app_core.integrations.discord.launcher import DiscordLauncher
 from process.app_core.desktop.state import DesktopState
 from process.app_core.persistence.conversation_store import ConversationStore
 from process.app_core.events.bus import RuntimeEvent
+from process.app_core.configuration.paths import DataPaths
 
 
 def test_access_revision_and_live_gates(tmp_path, monkeypatch):
     monkeypatch.setattr('dotenv.dotenv_values', lambda path: {'Discord_admins':'1'})
-    service = DiscordAccess(tmp_path)
+    service = DiscordAccess(DataPaths.at(tmp_path))
     original = service.read()
     values = {'admins':['1'], 'users':['2'], 'channels':['3'], 'allow_dms':False, 'admin_actions':False}
     saved = service.save(values, original['revision'])
@@ -25,7 +26,7 @@ def test_access_revision_and_live_gates(tmp_path, monkeypatch):
 def test_reports_ignore_blocked_content_and_track_real_readiness(tmp_path, monkeypatch):
     monkeypatch.setattr('dotenv.dotenv_values',lambda path:{'Discord_admins':'1'})
     state = DesktopState()
-    service = DiscordLauncher(tmp_path,state)
+    service = DiscordLauncher(DataPaths.at(tmp_path),state.activity)
     client = str(uuid4())
     service.attach(client)
     assert not service.status()['ready']
@@ -34,11 +35,11 @@ def test_reports_ignore_blocked_content_and_track_real_readiness(tmp_path, monke
     assert state.snapshot()['discord']['ready']
     message = {'kind':'message','message_id':'10','user_id':'2','channel_id':'3','guild_id':None,'text':'blocked'}
     service.report(client,message)
-    assert not state.incoming
+    assert not state.snapshot()['incoming']
     service.report(client,{**message,'message_id':'11','user_id':'1','text':'hello'})
-    assert state.incoming[0]['source']=='discord'
+    assert state.snapshot()['incoming'][0]['source']=='discord'
     service.report(client,{**message,'message_id':'12','user_id':'1','author_bot':True})
-    assert len(state.incoming)==1
+    assert len(state.snapshot()['incoming'])==1
     assert len(service.inbox_snapshot()['messages'])==3
     service.detach(client)
     assert not service.status()['running']
@@ -60,7 +61,7 @@ def test_access_cache_reloads_external_edits_and_preserves_fail_closed(tmp_path,
     import json
     calls=[]
     monkeypatch.setattr('dotenv.dotenv_values',lambda path:calls.append(path) or {'Discord_admins':'1'})
-    service=DiscordAccess(tmp_path)
+    service=DiscordAccess(DataPaths.at(tmp_path))
     for _ in range(20): assert service.settings().admins==frozenset({1})
     assert len(calls)==1
     service.path.parent.mkdir()

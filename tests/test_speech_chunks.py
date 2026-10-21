@@ -1,46 +1,47 @@
 import pytest
 
-from process.app_core.audio.speech_chunks import SpeechChunks, validate_settings
+from process.app_core.audio.speech_chunks import SpeechChunks
+from process.app_core.kernel.audio_config import SpeechConfig
 
 
 def test_short_reply_waits_for_generation_end():
-    splitter = SpeechChunks({'max_words': 8, 'split_window_words': 4})
+    splitter = SpeechChunks(SpeechConfig.from_raw({'max_words': 8, 'split_window_words': 4}))
     assert splitter.feed('Hello there. How are you? ') == []
     assert splitter.feed('', final=True) == ['Hello there. How are you?']
 
 
 def test_sentence_ending_has_priority_over_nearer_comma():
-    splitter = SpeechChunks({'max_words': 8, 'split_window_words': 4})
+    splitter = SpeechChunks(SpeechConfig.from_raw({'max_words': 8, 'split_window_words': 4}))
     assert splitter.feed('one two three four. five six seven, eight nine ten') == ['one two three four.']
     assert splitter.feed('', final=True) == ['five six seven, eight nine ten']
 
 
 def test_waits_past_limit_until_future_punctuation():
-    splitter = SpeechChunks({'max_words': 4, 'split_window_words': 2})
+    splitter = SpeechChunks(SpeechConfig.from_raw({'max_words': 4, 'split_window_words': 2}))
     assert splitter.feed('one two three four five six') == []
     assert splitter.feed(' seven, eight') == ['one two three four five six seven,']
     assert splitter.feed('', final=True) == ['eight']
 
 
 def test_final_tail_without_boundary_is_not_forced_apart():
-    splitter = SpeechChunks({'max_words': 4, 'split_window_words': 2})
+    splitter = SpeechChunks(SpeechConfig.from_raw({'max_words': 4, 'split_window_words': 2}))
     assert splitter.feed('one two three four five six', final=True) == ['one two three four five six']
 
 
 def test_old_boundary_outside_window_is_not_used():
-    splitter = SpeechChunks({'max_words': 8, 'split_window_words': 2})
+    splitter = SpeechChunks(SpeechConfig.from_raw({'max_words': 8, 'split_window_words': 2}))
     assert splitter.feed('one. two three four five six seven eight nine') == []
 
 
 def test_comma_can_be_configured_above_period():
-    splitter = SpeechChunks({'max_words': 8, 'split_window_words': 4, 'split_priority':[',', '.!?']})
+    splitter = SpeechChunks(SpeechConfig.from_raw({'max_words': 8, 'split_window_words': 4, 'split_priority':[',', '.!?']}))
     assert splitter.feed('one two three four. five six seven, eight nine') == ['one two three four. five six seven,']
 
 
 def test_no_text_is_lost_at_any_stream_boundary():
     source = 'one two three four. five six, seven eight nine ten. End.'
     for size in range(1, len(source)):
-        splitter = SpeechChunks({'max_words': 8, 'split_window_words': 4})
+        splitter = SpeechChunks(SpeechConfig.from_raw({'max_words': 8, 'split_window_words': 4}))
         pieces = []
         for offset in range(0, len(source), size):
             pieces.extend(splitter.feed(source[offset:offset+size]))
@@ -49,6 +50,12 @@ def test_no_text_is_lost_at_any_stream_boundary():
 
 
 @pytest.mark.parametrize('settings', [{'max_words':True}, {'max_words':0}, {'split_window_words':41},
-    {'split_priority':[]}, {'split_priority':['.', '.']}, {'split_priority':['abc']}])
+    {'split_priority':[]}, {'split_priority':['.', '.']}, {'split_priority':['abc']}, {'max_words': 'nan'}, {'max_words': 4.5}, []])
 def test_invalid_settings_rejected(settings):
-    with pytest.raises(ValueError): validate_settings(settings)
+    with pytest.raises(ValueError, match='speech'): SpeechConfig.from_raw(settings)
+
+
+def test_settings_read_numeric_text_and_an_emptied_section_as_defaults():
+    # PyYAML (YAML 1.1) reads a quoted or exponent number as text; ruamel and Electron read a number.
+    assert SpeechConfig.from_raw({'max_words': '12', 'split_window_words': 4.0}) == SpeechConfig(max_words=12, split_window_words=4)
+    assert SpeechConfig.from_raw(None) == SpeechConfig() == SpeechChunks().settings

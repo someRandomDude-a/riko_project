@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -21,6 +24,8 @@ class RuntimeEvent:
 
 
 class EventBus:
+    """Synchronous: listeners run on the publisher's thread. Never publish while holding a
+    lock other than SessionManager._voice_lock; queue through events.outbox.Outbox instead."""
     def __init__(self):
         self._lock = threading.RLock()
         self._listeners = []
@@ -41,7 +46,7 @@ class EventBus:
         with self._lock: listeners = tuple(self._listeners)
         for listener in listeners:
             try: listener(event)
-            except Exception: pass
+            except Exception: logger.exception('Event listener %r failed on %s', listener, event_type)
         return event
 
 

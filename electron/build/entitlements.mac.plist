@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened-runtime exceptions for Riko.app and everything inside it (electron-builder.yml: entitlements and
+     entitlementsInherit), including the frozen backend, Contents/Resources/backend/riko-backend. -->
+<plist version="1.0">
+  <dict>
+    <!-- V8 compiles JavaScript at run time in the main process and the renderer and GPU helpers. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <!-- The backend opens the microphone for voice input; macOS attributes it to Riko (NSMicrophoneUsageDescription). -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <!-- The backend's Python, torch and llama.cpp libraries are signed ad hoc or by their builders, not with Riko's Team ID. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>

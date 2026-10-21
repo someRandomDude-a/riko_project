@@ -8,7 +8,8 @@ import pytest
 from process.app_core.inference.llama_native import NativeClient, NativeRuntime
 from process.app_core.configuration.config import load_config
 from process.app_core.configuration.config import RuntimeConfig
-from process.app_core.conversation.messages import ChatMessage
+from process.app_core.kernel.messages import ChatMessage
+from process.app_core.kernel.turns import TurnContext
 from process.app_core.inference.llama_native import InProcessLlamaProvider
 from process.app_core.configuration.settings_store import SettingsStore, field
 
@@ -74,9 +75,10 @@ def test_interval_is_ui_slider_and_live_only_change(tmp_path):
 
 
 def test_julia_gpu_option_does_not_enable_gpu_probe():
-    assert field('emotion.device', 'cpu')['options'] == ['cpu', 'cuda', 'cuda:0']
+    assert field('emotion.device', 'cpu')['options'] == ['cpu', 'auto', 'cuda', 'cuda:0']
+    assert field('memory.device', 'cpu')['options'] == ['cpu', 'auto', 'cuda', 'cuda:0', 'mps']
     from process.app_core.emotion.probe import ProbeConfig
-    with pytest.raises(ValueError): ProbeConfig.from_raw({'device': 'cuda'})
+    assert not hasattr(ProbeConfig.from_raw({'device': 'cuda'}), 'device')  # ignored (load_config reports it), never a GPU probe
 
 
 def test_probe_cannot_silently_use_stock_http_server(tmp_path):
@@ -259,7 +261,7 @@ def test_missing_library_fails_before_model_resolution(tmp_path, monkeypatch):
 
 
 def test_native_probe_capture_checks_utf8_prefix_and_turn_alignment(monkeypatch):
-    from process.app_core.emotion.probe import FEATURE_VERSION
+    from process.app_core.emotion.probe_hook import FEATURE_VERSION, ProbeHook
     runtime = fake_runtime([])
     samples = []
     probe = SimpleNamespace(active_group=None, close=lambda: None)
@@ -283,9 +285,11 @@ def test_native_probe_capture_checks_utf8_prefix_and_turn_alignment(monkeypatch)
         return 0
     runtime.dll.riko_request = request
     provider = InProcessLlamaProvider(RuntimeConfig(model_path='unused.gguf'))
+    hook = ProbeHook(lambda identity, idle: probe)
+    provider.attach_probe(hook, 32)
+    hook.start({}, provider.probe_idle)  # what _start does once the model is up
     provider.native = runtime
     provider.client = NativeClient(runtime)
-    provider.probe = probe
     monkeypatch.setattr(provider, '_start', lambda: None)
     runtime.dll.riko_stop = lambda _: None
     runtime.dll.riko_destroy = lambda _: None
@@ -299,3 +303,310 @@ def test_native_probe_capture_checks_utf8_prefix_and_turn_alignment(monkeypatch)
         assert not options['cancelled']()
     finally:
         provider.close()
+
+
+def gguf(path, context_length):
+    import struct
+    def text(value):
+        data = value.encode()
+        return struct.pack('<Q', len(data)) + data
+    entries = [text('general.architecture') + struct.pack('<I', 8) + text('llama'),
+        text('llama.context_length') + struct.pack('<II', 4, context_length)]
+    path.write_bytes(b'GGUF' + struct.pack('<IQQ', 3, 0, len(entries)) + b''.join(entries))
+
+
+def test_budgets_above_the_training_context_fail_before_loading(tmp_path, monkeypatch):
+    gguf(tmp_path / 'model.gguf', 4096)
+    (tmp_path / 'riko-native.dll').write_bytes(b'test-library')
+    def unexpected(*args): raise AssertionError('The model must not load')
+    monkeypatch.setattr('process.app_core.inference.llama_native.NativeRuntime', unexpected)
+    config = RuntimeConfig(provider='llama_cpp', model_path=tmp_path / 'model.gguf', native_library=tmp_path / 'riko-native.dll', n_ctx=8192)
+    config.initiative_n_ctx = config.reflection_n_ctx = 4096
+    provider = InProcessLlamaProvider(config)
+    try:
+        with pytest.raises(RuntimeError, match=r'trained for 4096 tokens.*Lower runtime\.n_ctx \(8192\) to 4096'): provider.warmup()
+    finally:
+        provider.close()
+
+
+def test_short_slots_and_cpu_fallback_are_reported(tmp_path, monkeypatch, caplog):
+    gguf(tmp_path / 'model.gguf', 32768)
+    (tmp_path / 'riko-native.dll').write_bytes(b'test-library')
+    runtime = fake_runtime([])
+    runtime.notes = 'riko-native: no GPU device from libggml-vulkan; llama.cpp runs on the CPU (is the GPU driver installed? ggml-hip also needs ROCm)\nload_tensors: offloaded 0/37 layers to GPU'
+    def request(handle, path, body, output, cancel, user):
+        data = json.dumps([{'n_ctx': 4096}, {'n_ctx': 4096}]).encode()
+        buffer = ctypes.create_string_buffer(data)
+        output(200, ctypes.cast(buffer, ctypes.c_void_p), len(data), user)
+        return 0
+    runtime.dll = SimpleNamespace(riko_request=request, riko_stop=lambda _: None, riko_destroy=lambda _: None)
+    monkeypatch.setattr('process.app_core.inference.llama_native.NativeRuntime', lambda *args: runtime)
+    provider = InProcessLlamaProvider(RuntimeConfig(provider='llama_cpp', model_path=tmp_path / 'model.gguf',
+        native_library=tmp_path / 'riko-native.dll', n_ctx=8192))
+    try:
+        with caplog.at_level('WARNING'), pytest.raises(RuntimeError, match=r'allocated 2 slots of \[4096\] tokens, but Riko needs 2 slots of 8192'):
+            provider.warmup()
+        assert 'only 0 of 37 layers on the GPU' in caplog.text
+        assert 'WARNING' in caplog.text and 'no GPU device from libggml-vulkan; llama.cpp runs on the CPU' in caplog.text  # the bridge's notes
+    finally:
+        provider.close()
+
+
+class FakeNativeLibrary:
+    """Stands in for ctypes.CDLL(riko-native): plain functions accept the argtypes/restype that _bind sets."""
+    def __init__(self, create):
+        self.destroyed = []
+        def riko_create(*args): return create(*args)
+        def riko_request(*args): return 0
+        def riko_set_interval(*args): return 0
+        def riko_stop(handle): pass
+        def riko_destroy(handle): self.destroyed.append(handle)
+        self.riko_create, self.riko_request, self.riko_set_interval = riko_create, riko_request, riko_set_interval
+        self.riko_stop, self.riko_destroy = riko_stop, riko_destroy
+
+
+def test_native_runtime_is_live_from_create_until_destroy(monkeypatch, tmp_path):
+    import process.app_core.inference.llama_native as native
+    library = FakeNativeLibrary(lambda *args: 77)
+    monkeypatch.setattr(native.ctypes, 'CDLL', lambda path: library)
+    runtime = native.NativeRuntime(tmp_path / 'riko-native.dll', ['riko-native'])
+    try:
+        assert runtime in native._LIVE and runtime.handle == 77
+        runtime.close()
+        assert library.destroyed == [77] and runtime not in native._LIVE and runtime.handle is None
+    finally: native._LIVE.discard(runtime)
+    def failed(arguments, interval, error, capacity):
+        error.value = b'native model initialization failed'
+    monkeypatch.setattr(native.ctypes, 'CDLL', lambda path: FakeNativeLibrary(failed))
+    before = set(native._LIVE)
+    with pytest.raises(RuntimeError, match='initialization failed'): native.NativeRuntime(tmp_path / 'riko-native.dll', ['riko-native'])
+    assert native._LIVE == before
+
+
+def device(index, name, backend, kind, device_id=None, total=8 << 30, free=6 << 30, description='Device'):
+    return {'index': index, 'name': name, 'description': description, 'backend': backend, 'type': kind, 'device_id': device_id,
+        'memory_free': free, 'memory_total': total}
+
+
+def devices_library(results, calls):
+    """FakeNativeLibrary with a riko_devices answering each call from `results`: (length, text written)."""
+    library = FakeNativeLibrary(lambda *args: 77)
+    def riko_devices(buffer, capacity):
+        length, text = results.pop(0)
+        calls.append(capacity)
+        if text is not None and (length < 0 or length < capacity): buffer.value = text.encode()
+        return length
+    library.riko_devices = riko_devices
+    return library
+
+
+def test_riko_devices_is_optional_parsed_retried_and_never_runs_at_exit(monkeypatch, tmp_path, caplog):
+    import process.app_core.inference.llama_native as native
+    monkeypatch.setattr(native.ctypes, 'CDLL', lambda path: FakeNativeLibrary(lambda *args: 77))
+    old = native.NativeRuntime(tmp_path / 'riko-native.dll', ['riko-native'])  # a bridge from before riko_devices
+    try: assert old.devices_function is None and old.devices() is None
+    finally: old.close()
+    listed = [device(0, 'CUDA0', 'CUDA', 'gpu', '0000:01:00.0'), device(1, 'CPU', 'CPU', 'cpu', total=64 << 30)]
+    text = json.dumps({'version': 1, 'devices': listed})
+    calls, results = [], []
+    monkeypatch.setattr(native.ctypes, 'CDLL', lambda path: devices_library(results, calls))
+    runtime = native.NativeRuntime(tmp_path / 'riko-native.dll', ['riko-native'])
+    try:
+        assert runtime.devices_function.argtypes == [ctypes.c_char_p, ctypes.c_size_t] and runtime.devices_function.restype is ctypes.c_int
+        results[:] = [(len(text), text)]
+        assert runtime.devices() == listed and calls == [16384]
+        results[:] = [(20000, None), (len(text), text)]  # too long for the first buffer: once more with room for it
+        calls.clear()
+        assert runtime.devices() == listed and calls == [16384, 20256]
+        results[:] = [(-2, 'riko_devices before riko_create')]
+        assert runtime.devices() is None and 'riko_devices' not in caplog.text  # not initialised yet: not a failure
+        for answer in [(-1, 'no backend'), (len('{"version": 2}'), '{"version": 2}'),
+                (len(json.dumps({'version': 1, 'devices': [{**listed[0], 'type': 'tpu'}]})), json.dumps({'version': 1, 'devices': [{**listed[0], 'type': 'tpu'}]}))]:
+            results[:] = [answer]
+            assert runtime.devices() is None
+        assert caplog.text.count('riko_devices failed') == 1 and 'no backend' in caplog.text  # logged once, then quiet
+        monkeypatch.setattr(native, '_EXITING', True)  # _release_at_exit: no call may run into exit()'s static destructors
+        results[:] = [(len(text), text)]
+        assert runtime.devices() is None and results
+    finally: runtime.close()
+    assert runtime.devices() is None  # closed
+
+
+def test_release_at_exit_stops_device_queries_first(monkeypatch):
+    import process.app_core.inference.llama_native as native
+    monkeypatch.setattr(native, '_EXITING', False)
+    monkeypatch.setattr(native, '_LIVE', set())
+    native._release_at_exit()
+    assert native._EXITING is True and not native._DEVICES_LOCK.locked()
+
+
+def test_model_devices_follows_llama_cpp_default_device_selection():
+    # llama_prepare_model_devices (src/llama.cpp at the pin): RPC first, discrete GPUs once per device_id, iGPUs only without
+    # a discrete GPU (and only the first iGPU's backend), CPU and BLAS never; split_mode none keeps devices[main_gpu].
+    from process.app_core.inference.devices import model_devices
+    cuda0, cuda1 = device(0, 'CUDA0', 'CUDA', 'gpu', '0000:02:00.0'), device(1, 'CUDA1', 'CUDA', 'gpu', '0000:01:00.0')
+    vulkan = device(2, 'Vulkan0', 'Vulkan', 'gpu', '0000:01:00.0')  # the same card as CUDA1 through another backend
+    igpu, igpu_vk = device(3, 'Vulkan1', 'Vulkan', 'igpu', '0000:00:02.0'), device(4, 'SYCL0', 'SYCL', 'igpu', '0000:00:02.0')
+    rpc, cpu, blas = device(5, 'RPC0', 'RPC', 'gpu'), device(6, 'CPU', 'CPU', 'cpu'), device(7, 'BLAS', 'BLAS', 'accel')
+    names = lambda chosen: chosen if chosen is None else [d['name'] for d in chosen]
+    every = [cuda0, cuda1, vulkan, igpu, igpu_vk, rpc, cpu, blas]
+    assert names(model_devices(every, split_mode='layer', main_gpu=0)) == ['RPC0', 'CUDA0', 'CUDA1']
+    assert names(model_devices(every, split_mode='none', main_gpu=2)) == ['CUDA1']  # RPC counts in main_gpu's indexing
+    assert names(model_devices([igpu, igpu_vk, cpu], split_mode='layer', main_gpu=0)) == ['Vulkan1']
+    assert names(model_devices([igpu, device(8, 'Vulkan2', 'Vulkan', 'igpu'), cpu], split_mode='layer', main_gpu=0)) == ['Vulkan1', 'Vulkan2']
+    assert names(model_devices([cuda0, igpu, cpu], split_mode='layer', main_gpu=0)) == ['CUDA0']
+    assert names(model_devices([cuda0, device(1, 'CUDA1', 'CUDA', 'gpu'), device(2, 'CUDA2', 'CUDA', 'gpu')], split_mode='layer', main_gpu=0)) == ['CUDA0', 'CUDA1', 'CUDA2']  # no id: never a duplicate
+    assert names(model_devices([cuda0, cpu], split_mode='none', main_gpu=1)) is None  # llama.cpp refuses this main_gpu
+    assert names(model_devices([cpu, blas], split_mode='none', main_gpu=3)) == []  # the CPU only, whatever main_gpu says
+    metal = device(0, 'MTL0', 'MTL', 'gpu', description='Apple M5 Pro')  # Metal reports a gpu, without a PCI id
+    assert names(model_devices([metal, blas, cpu], split_mode='none', main_gpu=0)) == ['MTL0']
+
+
+def test_provider_devices_mark_the_model_and_main_device(tmp_path):
+    from types import SimpleNamespace as NS
+    library = tmp_path / 'riko-native.dll'; library.write_bytes(b'library')
+    provider = InProcessLlamaProvider(RuntimeConfig(provider='llama_cpp', model_path=tmp_path / 'model.gguf', native_library=library, split_mode='layer'))
+    listed = [device(0, 'CUDA0', 'CUDA', 'gpu', '0000:02:00.0'), device(1, 'CUDA1', 'CUDA', 'gpu', '0000:01:00.0'), device(2, 'CPU', 'CPU', 'cpu')]
+    try:
+        assert provider.devices() is None  # before the model loads
+        provider.native = NS(devices=lambda: listed)
+        assert [(d['name'], d['model'], d['main']) for d in provider.devices()] == [('CUDA0', True, False), ('CUDA1', True, False), ('CPU', False, False)]
+        provider.config.split_mode, provider.config.main_gpu = 'none', 1
+        assert [(d['name'], d['model'], d['main']) for d in provider.devices()] == [('CUDA0', False, False), ('CUDA1', True, True), ('CPU', False, False)]
+        provider.config.n_gpu_layers = 0  # no layer offloaded: no device runs the model
+        assert not any(d['model'] or d['main'] for d in provider.devices())
+        provider.native = NS(devices=lambda: None)  # an older bridge
+        assert provider.devices() is None
+    finally:
+        provider.native = None
+        provider.close()
+
+
+def test_release_native_refuses_while_loading_and_waits_for_a_destroy_in_progress(monkeypatch, tmp_path):
+    import process.app_core.inference.llama_native as native
+    loading, loaded, entered, release = threading.Event(), threading.Event(), threading.Event(), threading.Event()
+    def create(*args):
+        loading.set()
+        assert loaded.wait(5)
+        return 5
+    library = FakeNativeLibrary(create)
+    monkeypatch.setattr(native.ctypes, 'CDLL', lambda path: library)
+    built = []
+    thread = threading.Thread(target=lambda: built.append(native.NativeRuntime(tmp_path / 'riko-native.dll', ['riko-native'])))
+    thread.start()
+    try:
+        assert loading.wait(5)
+        assert native.release_native(5) is False  # riko_create cannot be interrupted: exit must skip destructors
+        loaded.set(); thread.join(5)
+        def stalled(*args):
+            entered.set()
+            assert release.wait(5)  # a native call still inside llama.cpp when shutdown starts
+            return 1
+        library.riko_request = stalled
+        built[0].request('/v1/responses', {})
+        assert entered.wait(5)
+        closing = threading.Thread(target=built[0].close); closing.start()  # e.g. an abandoned close_bounded
+        assert native.release_native(.2) is False and library.destroyed == []
+        release.set()
+        assert native.release_native(5) is True and library.destroyed == [5]
+        closing.join(5)
+    finally:
+        loaded.set(); release.set(); native._LIVE.difference_update(built)
+
+
+def test_exit_guard_skips_native_destructors_only_when_a_context_cannot_be_destroyed():
+    import os, subprocess, sys
+    from pathlib import Path
+    script = """
+import sys
+import process.app_core.inference.llama_native as native
+class Runtime:
+    handle = None if sys.argv[1] == 'loading' else 1
+    def close(self): native._LIVE.discard(self)
+native._LIVE.add(Runtime())
+sys.exit(3)
+"""
+    env = {**os.environ, 'PYTHONPATH': str(Path('Code').resolve())}
+    run = lambda state: subprocess.run([sys.executable, '-c', script, state], env=env, capture_output=True, text=True, timeout=120)
+    ready, loading = run('ready'), run('loading')
+    assert ready.returncode == 3, ready.stderr  # destroyed in time: the real exit status survives
+    assert loading.returncode == 1 and 'leaving it to the OS' in loading.stderr, loading.stderr
+
+
+@pytest.mark.parametrize('requested, notes, identity', [
+    ('auto', 'load_tensors: offloaded 37/37 layers to GPU\nresolve_fused_ops: Flash Attention enabled', True),
+    ('auto', 'resolve_fused_ops: Flash Attention not supported, set to disabled', False),
+    ('auto', '', 'auto'),  # an older bridge reports nothing
+    ('on', 'resolve_fused_ops: Flash Attention not supported, set to disabled', True), (False, '', False)])
+def test_probe_identity_records_the_flash_attention_llama_cpp_chose(requested, notes, identity):
+    provider = InProcessLlamaProvider(RuntimeConfig(provider='llama_cpp', model_path='unused.gguf', flash_attn=requested))
+    try:
+        provider.native = SimpleNamespace(notes=notes)
+        assert provider._flash_attention_identity() == identity
+    finally: provider.native = None; provider.close()
+
+
+def chat_over_native(monkeypatch, replies, tool_output='found'):
+    """ChatService on the native provider; the fake tokenizer counts four characters per token."""
+    from process.app_core.conversation.chat import ChatDeps, ChatService
+    from process.app_core.tools.registry import RegisteredTool, ToolRegistry
+    runtime, requests, replies = fake_runtime([]), [], iter(replies)
+    def request(handle, path, body, output, cancel, user):
+        path, payload = path.decode(), json.loads(body)
+        requests.append((path, payload))
+        if path == '/apply-template': data = {'prompt': '\n'.join(m['content'] for m in payload['messages'])}
+        elif path == '/tokenize': data = {'tokens': [0] * (len(payload['content']) // 4)}
+        else: data = {'type': 'response.completed', 'response': {'status': 'completed', 'output': [next(replies)]}}
+        data = ('data: ' + json.dumps(data) + '\n\n' if path == '/v1/responses' else json.dumps(data)).encode()
+        buffer = ctypes.create_string_buffer(data)
+        output(200, ctypes.cast(buffer, ctypes.c_void_p), len(data), user)
+        return 0
+    runtime.dll = SimpleNamespace(riko_request=request, riko_stop=lambda _: None, riko_destroy=lambda _: None)
+    provider = InProcessLlamaProvider(RuntimeConfig(model_path='unused.gguf'))
+    provider.native, provider.client = runtime, NativeClient(runtime)
+    monkeypatch.setattr(provider, '_start', lambda: None)
+    registry = ToolRegistry()
+    registry.tools['lookup'] = RegisteredTool('lookup', 'Look it up', {'type': 'object', 'properties': {}}, lambda args: tool_output)
+    chat = ChatService(provider, system_prompt='Riko', tool_registry=registry, deps=ChatDeps(context_limit=8192))
+    chat.conversation.append([ChatMessage(role, f'{role} {i} ' + 'q' * 400) for i in range(120) for role in ('user', 'assistant')])
+    return chat, requests
+
+
+CALL = {'type': 'function_call', 'call_id': 'call', 'name': 'lookup', 'arguments': '{}'}
+SAID = {'type': 'message', 'content': [{'type': 'output_text', 'text': 'Summary'}]}
+
+
+def test_native_chat_keeps_sent_observations_and_a_fixed_prefix_with_one_count_per_reply(monkeypatch):
+    chat, requests = chat_over_native(monkeypatch, [CALL, CALL, SAID] + [SAID] * 5)
+    observed = iter(range(100))
+    observe = TurnContext(runtime=lambda: {'observation': next(observed)})
+    try:
+        for turn in range(6): assert chat.respond(f'turn {turn} ' + 'z' * 400, context=observe).message.content == 'Summary'
+    finally: chat.tool_registry.close(); chat.provider.close()
+    inputs = [body['input'] for path, body in requests if path == '/v1/responses']
+    counts, pending = [], 0
+    for path, _ in requests:
+        if path == '/apply-template': pending += 1
+        elif path == '/v1/responses': counts.append(pending); pending = 0
+    assert len(inputs) == 8
+    for number, items in enumerate(inputs):  # every request carries the latest observation
+        assert f'{{\\"observation\\": {number}}}' in json.dumps(items)
+    # A tool loop keeps the observations it already sent, so each of its requests extends the previous one.
+    assert [json.dumps(items).count('Current runtime observation') for items in inputs] == [1, 2, 3, 1, 1, 1, 1, 1]
+    assert all(later[:len(earlier)] == earlier for earlier, later in zip(inputs[:2], inputs[1:3]))
+    assert counts[1:] == [1] * 7  # after the first pack, one template+tokenize per request
+    assert len({json.dumps(items[1]) for items in inputs}) == 1  # one retained start for every request
+    for earlier, later in zip(inputs[3:], inputs[4:]):  # each reply's prompt, minus its current input, prefixes the next
+        assert later[:len(earlier) - 1] == earlier[:-1]
+
+
+def test_native_chat_answers_with_cut_tool_output_instead_of_failing(monkeypatch):
+    chat, requests = chat_over_native(monkeypatch, [CALL, SAID], 'HEAD' + 'x' * 100000 + 'TAIL')
+    try: assert chat.respond('summarise report.pdf').message.content == 'Summary'
+    finally: chat.tool_registry.close(); chat.provider.close()
+    sent = [body['input'] for path, body in requests if path == '/v1/responses'][-1]
+    result = next(item['output'] for item in sent if item.get('type') == 'function_call_output')
+    assert result.startswith('HEAD') and result.endswith('TAIL') and '[tool output truncated to fit the context: ' in result
+    prompt = sum(len(item['output'] if 'output' in item else item.get('content') if isinstance(item.get('content'), str) else '') for item in sent)
+    assert prompt // 4 + 1024 <= 8192 and len(result) > 20000
+    assert [m.content for m in chat.history[-2:]] == ['User: summarise report.pdf', 'Summary']

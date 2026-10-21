@@ -1,8 +1,11 @@
 """Self-contained VRM library; imports copy bytes without overwriting user assets."""
 import json
+import os
 from pathlib import Path
 import struct
 import threading
+
+from ..kernel.safe_paths import Outside, local_path, resolve_within
 
 MAX_BYTES = 128 * 1024 * 1024
 FORMATS = ('auto', 'vrm0', 'vrm1')
@@ -54,7 +57,7 @@ def inspect_model(path):
 
 class AvatarModels:
     def __init__(self, root):
-        self.root = Path(root).resolve()
+        self.given, self.root = os.path.abspath(root), Path(root).resolve()
         self.directory = self.root / 'character_files' / 'models'
 
     def listing(self):
@@ -69,16 +72,15 @@ class AvatarModels:
 
     def validate(self, value, model_format='auto'):
         if model_format not in FORMATS: raise ValueError('Choose Auto, VRM 0.x or VRM 1.0')
-        path = Path(value).expanduser()
-        path = (path if path.is_absolute() else self.root / path).resolve()
-        if not path.is_relative_to((self.root / 'character_files').resolve()): raise ValueError('Import the VRM into character_files/models first')
+        # Checked as text before anything resolves it: a network path never reaches the filesystem (kernel/safe_paths.py).
+        try: path = resolve_within(value, [os.path.join(self.given, 'character_files'), self.root / 'character_files'], self.given)
+        except Outside: raise ValueError('Import the VRM into character_files/models first') from None
         detected = inspect_model(path)
         if model_format != 'auto' and model_format != detected: raise ValueError(f'Model is {detected}; choose Auto or the matching format')
         return path, detected
 
     def import_model(self, value):
-        source = Path(value).expanduser()
-        source = (source if source.is_absolute() else self.root / source).resolve()
+        source = local_path(value, self.root).resolve()  # any local file; a network path is refused before it resolves
         detected = inspect_model(source)
         with LOCK:
             if not self.directory.resolve().is_relative_to(self.root): raise ValueError('Model directory must stay inside the repository')
@@ -103,3 +105,12 @@ class AvatarModels:
                 destination.unlink(missing_ok=True)
                 raise
         return {'path': destination.relative_to(self.root).as_posix(), 'format': detected}
+
+
+def review_settings(candidate, draft, changes):
+    """Settings' check of an edited avatar.model or avatar.format (a Section review: desktop imports nothing but kernel from
+    app_core, so app_core/__init__.py registers it)."""
+    if not {'avatar.model', 'avatar.format'} & changes.keys(): return {}
+    try: AvatarModels(candidate.root).validate(draft['avatar.model'], draft['avatar.format'])
+    except (ValueError, OSError) as exc: return {'avatar.model': str(exc)}
+    return {}

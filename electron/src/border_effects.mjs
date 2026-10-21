@@ -16,5 +16,9 @@ export function borderEffect(target,preferences,voice,{wake=false,generating=fal
  const p={...borderDefaults,...preferences},prefix=target+'Border',trigger=p[prefix+'Trigger'];
  const active=p[prefix+'Enabled']&&(trigger==='generating'?generating:trigger==='mic'?voice.enabled:voice.enabled&&!voice.wake?.calibrating&&!voice.wake?.testing&&(trigger==='wake'&&wake||trigger==='awake'&&(voice.wake?.active||['awake','capturing','transcribing','follow_up'].includes(voice.phase))||trigger==='capturing'&&voice.phase==='capturing'||trigger==='transcribing'&&['capturing','transcribing'].includes(voice.phase)));
  const level=p[prefix+'Activity']?Math.max(0,Math.min(1,voice.level||0)):0;
- return {active:!!active,className:'border-effect effect-'+p[prefix+'Style']+(p[prefix+'Pulse']||p[prefix+'Activity']?' effect-pulse':''),style:{'--effect-color':p[prefix+'Color'],'--effect-width':p[prefix+'Width']+'px','--effect-speed':p[prefix+'Speed']/(1+level*3)+'s','--effect-level':level}};
+ // The border moves only while something happens: listening, a reply generating, the wake flash, or (with Activity) sound on the
+ // microphone. Shown only because the microphone is on and waiting, it stands still (effect-still): no idle repainting.
+ const listening=voice.enabled&&(voice.wake?.active||['awake','capturing','transcribing','follow_up'].includes(voice.phase));
+ const moving=wake||generating||listening||level>.05;
+ return {active:!!active,className:'border-effect effect-'+p[prefix+'Style']+(p[prefix+'Pulse']||p[prefix+'Activity']?' effect-pulse':'')+(moving?'':' effect-still'),style:{'--effect-color':p[prefix+'Color'],'--effect-width':p[prefix+'Width']+'px','--effect-speed':p[prefix+'Speed']/(1+level*3)+'s','--effect-level':level}};
 }

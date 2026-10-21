@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Bone,Group,Vector3,Quaternion,Texture,Mesh,MeshBasicMaterial,BoxGeometry} from 'three';
-import {AvatarGesture,AvatarHover} from './avatar_input.mjs';
+import {AvatarGesture,AvatarHover,hoverReported} from './avatar_input.mjs';
 import {AvatarMouseSphere,nearestEndpoint} from './avatar_mouse_sphere.mjs';
 import {normalizeProfile} from './avatar_studio_settings.mjs';
 import {normalizeGraphics,applyTextureFiltering} from './avatar_graphics.mjs';
@@ -12,3 +12,10 @@ test('endpoint selection chooses only the nearest end and retains it through dra
 test('head endpoint is pulled through upstream owner, not by translating both bones',()=>{const {a,b,middle,sphere}=chain();sphere.position.set(.1,1,0);assert.equal(sphere.start(b).node,middle);const torque=new Map();sphere.addTorque(torque,b,middle,new Vector3(1,0,0),[a,b],true);assert.ok(torque.has(a.id));assert.equal(torque.has(b.id),false);});
 test('sphere spring and click bounce remain finite and return from Z bounce',()=>{const {sphere}=chain(),profile=normalizeProfile({});sphere.active=true;sphere.initialized=true;sphere.target.set(1,1,.1);sphere.position.copy(sphere.target);sphere.click();sphere.update(profile,.1);assert.ok(sphere.position.z<.1);for(let i=0;i<100;i++){sphere.restore();sphere.update(profile,1/60);}assert.ok(sphere.position.distanceTo(sphere.target)<.001);assert.ok(sphere.velocity.toArray().every(Number.isFinite));});
 test('graphics settings are validated and anisotropy respects GPU limits',()=>{const g=normalizeGraphics({avatarGraphics:{antialias:false,samples:99,anisotropy:16,pixelRatio:99}}).avatarGraphics;assert.equal(g.antialias,false);assert.equal(g.samples,4);assert.equal(g.pixelRatio,2);const scene=new Group(),texture=new Texture();scene.add(new Mesh(new BoxGeometry(),new MeshBasicMaterial({map:texture})));assert.equal(applyTextureFiltering(scene,{capabilities:{getMaxAnisotropy:()=>4}},g),4);assert.equal(texture.anisotropy,4);});
+test('a move from one bone to another reaches the backend as one hover; leaving her, or a delayed hover, is still sent',()=>{
+ const hover=new AvatarHover(),a={bone:'head'},b={bone:'leftHand'},kinds=events=>events.map(e=>e.kind);
+ let events=hover.update(a,0,500);assert.deepEqual([kinds(events),hoverReported(events)],[['hover'],[true]]);
+ events=hover.update(b,100,500);assert.deepEqual([kinds(events),hoverReported(events)],[['leave','hover'],[false,true]]);
+ events=hover.update(b,600,500);assert.deepEqual([kinds(events),hoverReported(events)],[['hoverDelayed'],[true]]);
+ events=hover.update(null,700,500);assert.deepEqual([kinds(events),hoverReported(events)],[['leave'],[true]]);
+});

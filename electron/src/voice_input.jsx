@@ -3,8 +3,7 @@ import {Mic, MicOff, AudioLines} from './ui/icons.jsx';
 import {connectEvents} from './event_connection.mjs';
 import useVoiceState from './use_voice_state.jsx';
 import {voiceLabel,microphoneAction} from './voice_state.mjs';
-
-const API = 'http://127.0.0.1:8765';
+import {request} from './api.mjs';
 
 export default function VoiceInput({compact=false, disabled=false}) {
   const voice=useVoiceState(),enabled=voice.enabled,level=voice.level;
@@ -29,18 +28,13 @@ export default function VoiceInput({compact=false, disabled=false}) {
   }, []);
   async function toggle() {
     setPending(true); setError('');
-    try {
-      const response = await fetch(API + micAction.path, {method: 'POST'});
-      if (!response.ok) throw new Error(await response.text());
-    } catch (e) {setError(e.message);} finally {setPending(false);}
+    try {await request(micAction.path, {method: 'POST'});}
+    catch (e) {setError(e.message);} finally {setPending(false);}
   }
   async function calibration(action, extra = {}) {
     setPending(true); setError('');
-    try {
-      const response = await fetch(API + '/api/voice/calibration', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action, ...extra})});
-      if (!response.ok) throw new Error(await response.text());
-      setWake(await response.json());
-    } catch (e) {setError(e.message);} finally {setPending(false);}
+    try {setWake(await request('/api/voice/calibration', {method: 'POST', body: {action, ...extra}}));}
+    catch (e) {setError(e.message);} finally {setPending(false);}
   }
   const tones = ['natural voice', 'slightly softer', 'slightly louder', 'a little higher', 'a little lower', 'natural voice again'];
   return <section className={'voice-input '+(compact?'compact':'')}>

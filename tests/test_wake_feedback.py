@@ -2,9 +2,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from process.app_core.conversation.chat import ChatDeps
 from process.app_core.runtime.actions import ActionController
 from process.app_core.events.bus import event_bus
 from process.app_core.audio.wake_feedback import WakeFeedback, select_rule, validate_settings
+from process.app_core.inference.provider import BaseProvider
+from process.app_core.kernel.audio_config import audio_sections
+from process.app_core.configuration.paths import DataPaths
 
 
 def test_rule_selection_prefers_state_and_emotion_over_fallbacks():
@@ -76,8 +80,8 @@ def test_missing_or_outside_asset_does_not_suppress_valid_animation(tmp_path):
 def test_only_keyword_activation_triggers_session_feedback(tmp_path):
     from process.app_core.desktop.state import DesktopState
     from process.app_core.runtime.session import SessionManager
-    config = SimpleNamespace(root=tmp_path, character_name='Riko', raw={})
-    chat = SimpleNamespace(provider=SimpleNamespace(close=lambda: None))
+    config = SimpleNamespace(root=tmp_path, paths=DataPaths.at(tmp_path), character_name='Riko', raw={}, **audio_sections({}))
+    chat = SimpleNamespace(deps=ChatDeps(), provider=BaseProvider())
     session = SessionManager(config, chat, DesktopState())
     calls = []
     session.wake_feedback.trigger = lambda *a, **k: calls.append((a, k))
@@ -91,10 +95,10 @@ def test_only_keyword_activation_triggers_session_feedback(tmp_path):
         session._playing = {'text': 'speaking'}
         event_bus.publish('voice.activated', source='keyword')
         assert calls[-1][0][1] == 'speaking'
-        session.state.sleep_mode = True
+        session.state.set_sleep(True)
         event_bus.publish('voice.activated', source='keyword')
         assert calls[-1][0][1] == 'sleeping'
-        session.state.mic_enabled = False
+        session.state.set_mic(False)
         before = len(calls)
         event_bus.publish('voice.activated', source='keyword')
         assert len(calls) == before
@@ -104,6 +108,22 @@ def test_only_keyword_activation_triggers_session_feedback(tmp_path):
     finally:
         session._playing = None
         session.close()
+
+
+def test_invalid_feedback_settings_leave_no_session_worker_or_listener(tmp_path, monkeypatch):
+    """desktop_server keeps Settings up when the session cannot start, so a failed construction must not leak."""
+    from process.app_core.desktop.state import DesktopState
+    from process.app_core.runtime.session import SessionManager
+    closed = []
+    class Speech:
+        def __init__(self, *args): pass
+        def close(self): closed.append('speech')
+    monkeypatch.setattr('process.app_core.runtime.session.SpeechQueue', Speech)
+    config = SimpleNamespace(root=tmp_path, paths=DataPaths.at(tmp_path), character_name='Riko', raw={'wake_feedback': {'volume': 5}}, **audio_sections({}))
+    listeners = len(event_bus._listeners)
+    with pytest.raises(ValueError, match='wake_feedback.volume'):
+        SessionManager(config, SimpleNamespace(deps=ChatDeps(), provider=BaseProvider()), DesktopState())
+    assert closed == ['speech'] and len(event_bus._listeners) == listeners
 
 
 def test_feedback_defaults_and_rules_are_editable_and_validated_in_settings(tmp_path):

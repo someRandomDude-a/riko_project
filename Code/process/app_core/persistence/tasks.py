@@ -22,6 +22,9 @@ TASK_RULES = '''Task MCP rules:
 '''
 
 STATUSES = {'active', 'blocked', 'paused', 'completed', 'dismissed'}
+FIELDS = ('title', 'description', 'status', 'progress', 'next_step', 'blocker')
+# task_get's history in model context: newest events by default and at most, and the reason shown per event.
+TOOL_HISTORY_DEFAULT, TOOL_HISTORY_MAX, TOOL_REASON_CHARS = 5, 20, 500
 
 
 class TaskConflict(ValueError):
@@ -53,17 +56,37 @@ class TaskStore:
         try: return db.execute('SELECT COALESCE(MAX(id),0) FROM task_events').fetchone()[0]
         finally: db.close()
 
-    def get(self, task_id, *, history=True):
+    def get(self, task_id, *, history=True, history_limit=None):
+        """The record, with every change event (full snapshots) unless history_limit keeps only that many of the newest,
+        summarised without snapshots for a model's context; history_omitted then counts the rest. The store keeps all."""
+        if history_limit is not None and (isinstance(history_limit, bool) or not isinstance(history_limit, int) or history_limit < 0):
+            raise ValueError('history_limit must be a nonnegative integer')
         db = self.connect()
         try:
             db.execute('BEGIN')
             row = db.execute('SELECT record FROM tasks WHERE id=?', (task_id,)).fetchone()
             if row is None: raise KeyError(task_id)
             record = json.loads(row['record'])
-            if history:
+            if history and history_limit is None:
                 record['history'] = [json.loads(event['record']) for event in db.execute('SELECT record FROM task_events WHERE task_id=? ORDER BY id', (task_id,))]
+            elif history:
+                total = db.execute('SELECT COUNT(*) FROM task_events WHERE task_id=?', (task_id,)).fetchone()[0]
+                # One older event as well, to name the fields the oldest shown event changed.
+                rows = [json.loads(event['record']) for event in db.execute('SELECT record FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT ?', (task_id, history_limit + 1))][::-1]
+                record['history'] = [self._summary(event, previous) for previous, event in list(zip([None, *rows], rows))[max(0, len(rows) - history_limit):]]
+                record['history_omitted'] = total - len(record['history'])
             return record
         finally: db.close()
+
+    @staticmethod
+    def _summary(event, previous):
+        """A change event without its snapshot: who, when, why, which fields changed and the resulting status."""
+        snapshot, reason = event.get('snapshot', {}), event.get('reason', '')
+        summary = {key: event.get(key) for key in ('kind', 'timestamp', 'actor', 'source_turn_id', 'revision')}
+        summary.update(reason=reason if len(reason) <= TOOL_REASON_CHARS else reason[:TOOL_REASON_CHARS] + ' [truncated]',
+                       status=snapshot.get('status'), progress=snapshot.get('progress'))
+        if previous: summary['changed'] = [key for key in FIELDS if snapshot.get(key) != previous.get('snapshot', {}).get(key)]
+        return summary
 
     def list(self, *, include_closed=False, query='', limit=8, statuses=None):
         if not isinstance(limit, int) or not 1 <= limit <= 100: raise ValueError('Limit must be 1–100')
@@ -163,7 +186,7 @@ class TaskMCP:
         text = {'type': 'string'}
         schemas = {
             'task_list': ({'include_closed': {'type': 'boolean'}, 'query': text, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100}}, []),
-            'task_get': ({'task_id': text}, ['task_id']),
+            'task_get': ({'task_id': text, 'history_limit': {'type': 'integer', 'minimum': 0, 'maximum': TOOL_HISTORY_MAX}}, ['task_id']),
             'task_create': ({'title': text, 'description': text, 'next_step': text, 'reason': text}, ['title']),
             'task_update': ({'task_id': text, 'expected_revision': {'type': 'integer'}, 'reason': text,
                             'changes': {'type': 'object', 'additionalProperties': False, 'properties': {
@@ -171,11 +194,13 @@ class TaskMCP:
                                 'status': {'type': 'string', 'enum': sorted(STATUSES)}, 'progress': {'type': 'number', 'minimum': 0, 'maximum': 1}}}},
                             ['task_id', 'expected_revision', 'changes', 'reason'])}
         descriptions = {'task_list': 'Fetch tasks only when relevant. A nonempty query returns lexical matches only; use a small limit. Include closed tasks for completed/dismissed history.',
-                        'task_get': 'Retrieve a task with full change history and provenance.',
+                        'task_get': f'Retrieve a task with its newest changes and their provenance: {TOOL_HISTORY_DEFAULT} unless history_limit asks for up to {TOOL_HISTORY_MAX}. history_omitted counts older changes.',
                         'task_create': 'Track an explicit or agreed ongoing user goal; avoid casual mentions and duplicate tasks.',
                         'task_update': 'Update confirmed task progress, blockers, next steps or status. Requires current revision and evidence/reason; stale revisions are rejected.'}
-        return [{'name': name, 'description': descriptions[name], 'inputSchema': {'type': 'object', 'properties': properties, 'required': required, 'additionalProperties': False}}
-                for name, (properties, required) in schemas.items()]
+        # MCP annotations: the reads change nothing, so the initiative check may call them (ToolRegistry believes them only from
+        # this in-process server, registered as Riko's own; never from a configured one, task_mcp_server.py included).
+        return [{'name': name, 'description': descriptions[name], 'inputSchema': {'type': 'object', 'properties': properties, 'required': required, 'additionalProperties': False},
+                 'annotations': {'readOnlyHint': name in {'task_list', 'task_get'}}} for name, (properties, required) in schemas.items()]
 
     def call(self, name, arguments):
         try:
@@ -185,7 +210,11 @@ class TaskMCP:
             if not isinstance(arguments, dict) or set(arguments) - set(schema['properties']) or set(schema['required']) - set(arguments):
                 raise ValueError('Invalid or missing task tool arguments')
             if name == 'task_list': result = {'tasks': self.store.list(**arguments)}
-            elif name == 'task_get': result = self.store.get(**arguments)
+            elif name == 'task_get':
+                # Never the full snapshot history: it grows with every update and one call could overflow the context.
+                limit = arguments.get('history_limit', TOOL_HISTORY_DEFAULT)
+                if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= TOOL_HISTORY_MAX: raise ValueError(f'history_limit must be 0–{TOOL_HISTORY_MAX}')
+                result = self.store.get(arguments['task_id'], history_limit=limit)
             elif name in {'task_create', 'task_update'}:
                 method = self.store.create if name == 'task_create' else self.store.update
                 result = method(**arguments, actor=self.actor, source_turn_id=self.source_turn())

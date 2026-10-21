@@ -1,13 +1,11 @@
 # Complete local runtime: desktop, LM Studio/OpenAI-compatible providers,
 # Julia 1, memory, voice input/output, built-in tools, and Discord.
-openai
-pyyaml
-ruamel.yaml
-pypdf
+openai>=1.0
+pyyaml>=6.0
+ruamel.yaml>=0.18
+pypdf>=4
 huggingface_hub
-faiss-cpu
 sentence-transformers
-opencv-python
 httpx
 numpy
 requests
@@ -19,11 +17,12 @@ silero-vad
 scipy
 pillow>=10
 discord.py>=2.7.1,<3
-python-dotenv
+python-dotenv>=1.0
+aiohttp>=3.9
 transformers
-fastapi
-uvicorn
-websockets
+fastapi>=0.115
+uvicorn>=0.30
+websockets>=12
 onnxruntime
 # Wake enrollment uses EfficientWord-Net's ONNX module only. Install its wheel
 # with --no-deps (see install_reqs.sh); PyAudio is not used by this application.

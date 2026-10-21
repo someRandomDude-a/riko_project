@@ -15,10 +15,11 @@ import threading
 import uuid
 import time
 
+from ..kernel.schema import Section, Setting, dataclass_defaults, register
 from .models import EMOTIONS, EmotionState
+from .probe_hook import FEATURE_VERSION, FEATURE_WIDTH  # noqa: F401  (FEATURE_VERSION was defined here: old imports work)
 
 logger = logging.getLogger(__name__)
-FEATURE_VERSION = 'result_norm-pool256-v1'
 
 
 @dataclass
@@ -43,9 +44,8 @@ class ProbeConfig:
     @classmethod
     def from_raw(cls, raw):
         if not isinstance(raw, dict): raise ValueError('emotion.probe must be an object')
-        unknown = set(raw) - set(cls.__dataclass_fields__)
-        if unknown: raise ValueError(f'Unknown emotion.probe keys: {sorted(unknown)}')
-        value = cls(**raw)
+        # A key this class does not declare keeps its default: load_config reports it (configuration/schema.py unknown_settings).
+        value = cls(**{key: item for key, item in raw.items() if key in cls.__dataclass_fields__})
         if type(value.interval_tokens) is not int or not 1 <= value.interval_tokens <= 512:
             raise ValueError('probe.interval_tokens must be an integer between 1 and 512')
         for key in ('enabled', 'use_for_expression', 'auto_train', 'retain_sample_text'):
@@ -63,6 +63,38 @@ class ProbeConfig:
         return value
 
 
+def needs_native(config, raw):
+    """load_config, once AppConfig is assembled: the probe reads hidden states inside the in-process llama.cpp provider."""
+    if not ProbeConfig.from_raw(config.emotion.probe).enabled: return
+    if config.runtime.provider != 'llama_cpp' or not config.emotion.enabled:
+        raise ValueError('emotion.probe requires emotion.enabled and runtime.provider: llama_cpp with a probe-enabled native library')
+    if not config.runtime.native_library: raise ValueError('emotion.probe requires runtime.native_library pointing to the in-process probe DLL')
+
+
+PYTHON = ' Restart Python.'
+PROBE = {  # Settings metadata; every probe setting but these two is advanced
+    'enabled': dict(advanced=False, label='Latent emotion probe', help='Train a read-only CPU emotion probe against genuine Julia-1 labels from native llama.cpp hidden states. Requires the custom in-process DLL. Julia remains fallback until held-out validation passes.'),
+    'interval_tokens': dict(advanced=False, range=(1, 512), restart='none', live='probe_interval', label='Emotion probe interval (tokens)',
+        help='Run native capture and the CPU emotion probe at most once per this many generated tokens (reasoning-only samples are excluded). Default 32. Applies immediately on save. Generation still evaluates every token. Smaller values increase capture and teacher work.'),
+    'use_for_expression': dict(help='Automatically use the probe for agent expressions only after held-out validation passes. Julia remains for user input and low-confidence or unavailable-feature fallback. Disable to continue gathering comparisons.' + PYTHON),
+    'auto_train': dict(help='Train automatically only after continuous idle time and sufficient new samples. Inference, microphone activity and playback take priority. Manual Train now skips the idle delay, not foreground protection.' + PYTHON),
+    'idle_seconds': dict(help='Continuous idle time before automatic training. Default 300 seconds (five minutes).' + PYTHON),
+    'retain_sample_text': dict(help='Retain input and expression text for dataset review and replay with another main model. Text is private and stored locally. Applies to newly collected examples; older text-free records cannot be reconstructed.' + PYTHON),
+    'min_samples': dict(help='Minimum paired samples before training; evaluation also requires enough held-out message groups and emotion classes.' + PYTHON),
+    'min_agreement': dict(help='Minimum held-out emotion-label agreement with Julia before activation. Measures teacher imitation, not emotional truth.' + PYTHON),
+    'min_macro_f1': dict(help='Minimum class-balanced validation score. Helps prevent agreement dominated by one frequent emotion.' + PYTHON),
+    'max_rmse': dict(help='Maximum held-out score error for intensity, valence and arousal. Lower is stricter.' + PYTHON),
+    'min_confidence': dict(help='Minimum prediction confidence for expressions. Below this threshold Julia remains the fallback.' + PYTHON),
+    'hidden_units': dict(help='Two hidden-layer widths for the CPU expression head. Low-rank connections limit memory. Changing architecture creates a separate compatible artifact.' + PYTHON),
+    'rank': dict(help='Rank of the low-rank connections. Higher values add capacity and CPU cost. Changing architecture creates a separate artifact.' + PYTHON),
+    'epochs': dict(help='Number of passes through training samples. More epochs take longer and may overfit; held-out validation controls activation.' + PYTHON),
+    'retrain_every': dict(help='Minimum new samples required for automatic retraining after a previous run. Manual training bypasses this count, not the minimum dataset size.' + PYTHON),
+    'max_samples': dict(help='Maximum paired samples retained per compatible model artifact. Older records are evicted when this limit is reached. Retained text is part of this private dataset.' + PYTHON),
+}
+register(Section('emotion.probe', group='neural', title='Expression probe', advanced=True, strict=True, check=ProbeConfig.from_raw,
+    configure=needs_native, settings=tuple(Setting(key, default, **PROBE.get(key, {})) for key, default in dataclass_defaults(ProbeConfig).items())))
+
+
 def identity_key(identity):
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
@@ -78,7 +110,7 @@ def build_network(config):
     # Low-rank connections make 24,576 hidden units affordable on CPU rather
     # than allocating a dense 16,384 x 8,192 matrix.
     with torch.device('cpu'):
-        return nn.Sequential(nn.LayerNorm(256), nn.Linear(256, config.rank),
+        return nn.Sequential(nn.LayerNorm(FEATURE_WIDTH), nn.Linear(FEATURE_WIDTH, config.rank),
             nn.Linear(config.rank, a), nn.GELU(), nn.Linear(a, config.rank),
             nn.Linear(config.rank, b), nn.GELU(), nn.Linear(b, len(EMOTIONS) + 3))
 
@@ -86,7 +118,7 @@ def build_network(config):
 def latent_features(hidden):
     import torch
     value = hidden.detach().float().reshape(-1, hidden.shape[-1])[-1]
-    value = torch.nn.functional.adaptive_avg_pool1d(value[None, None], 256).flatten().cpu()
+    value = torch.nn.functional.adaptive_avg_pool1d(value[None, None], FEATURE_WIDTH).flatten().cpu()
     if not torch.isfinite(value).all(): raise ValueError('Nonfinite probe activations')
     return value
 
@@ -126,13 +158,13 @@ class EmotionProbe:
         self.config, self.teacher, self.idle = config, teacher, idle
         self.on_prediction = on_prediction
         self.on_fallback = on_fallback
-        with teacher._lock: teacher._load_model()
+        teacher.ensure_loaded()
         self.identity = {**identity, 'feature_version': FEATURE_VERSION,
             'teacher': teacher.model_id, 'teacher_path': str(teacher.model_path),
-            'teacher_snapshot': getattr(teacher, '_resolved_source', None),
-            'teacher_questions': teacher._questions(), 'teacher_context': teacher.context_tokens,
+            'teacher_snapshot': teacher.resolved_source,
+            'teacher_questions': teacher.question_set(), 'teacher_context': teacher.context_tokens,
             'teacher_max_length': teacher.max_length, 'teacher_strict_encoding': teacher.strict_encoding,
-            'teacher_fingerprint': teacher.probe_fingerprint(),
+            'teacher_fingerprint': teacher.fingerprint(),
             'network': [*config.hidden_units, config.rank]}
         self.key = identity_key(self.identity)
         self.path = Path(directory) / self.key / 'probe.pt'
@@ -147,10 +179,13 @@ class EmotionProbe:
         self.closed, self.training, self.since_train = False, False, 0
         self.idle_since = None
         self.manual_training = False
+        self.replaying = False  # replay() is generating from retained examples
         self.data_revision = str(uuid.uuid4())
         self.metadata = {}
         self.save_lock = threading.Lock()
         self.error = ''
+        self.save_blocked = ''  # Set when unreadable artifacts could not be kept aside: never overwrite them.
+        self._dormant = None  # (weights, validation) restored but not loaded; written back until replaced.
         self.segment_features=deque(maxlen=512)
         self._restore()
         self.thread = threading.Thread(target=self._run, name='emotion-probe', daemon=True)
@@ -171,7 +206,7 @@ class EmotionProbe:
             return {'model_key': self.key, 'ready': self.ready, 'training': self.training,
                 'samples': len(self.samples), 'pending': len(self.pending), 'validation': dict(self.validation),
                 'mode': 'probe' if self.ready and self.config.use_for_expression else 'julia_collecting',
-                'manual_training': self.manual_training, 'idle_seconds': self.config.idle_seconds,
+                'manual_training': self.manual_training, 'replaying': self.replaying, 'idle_seconds': self.config.idle_seconds,
                 'idle_elapsed': max(0,time.monotonic()-self.idle_since) if self.idle_since is not None else 0,
                 'revision': self.data_revision, 'error': self.error, 'emotions': list(EMOTIONS)}
 
@@ -182,6 +217,49 @@ class EmotionProbe:
             self.manual_training = True
             self.condition.notify_all()
             return self.status()
+
+    def replay(self, examples, lane):
+        """Generate a short new reply to each retained example's text on lane (ProbeHost.replay_lane: the capture slot, which
+        any live request preempts) whenever the provider and session are idle, so this backbone collects its own features and
+        Julia labels; no history, speech or UI turn. One replay at a time, on its own thread; a preempted example runs again."""
+        with self.condition:
+            if self.closed: raise RuntimeError('The expression probe is closed')
+            if self.replaying: raise RuntimeError('Example replay is already running')
+            self.replaying = True
+        try: threading.Thread(target=self._replay, args=(list(examples), lane), name='expression-example-replay', daemon=True).start()
+        except BaseException:
+            self.replaying = False
+            raise
+
+    def _wait(self, ready, poll):
+        """Poll ready() until it holds; False once closed. ready may take provider and session locks: never under self.condition."""
+        while not self.closed:
+            if ready(): return True
+            with self.condition: self.condition.wait(poll)  # close() wakes it
+        return False
+
+    def _replay(self, examples, lane):
+        from ..kernel.cancellation import BackgroundPreempted
+        from ..kernel.messages import ChatMessage
+        try:
+            for example in examples[:self.config.max_samples]:
+                text = example.get('text') if isinstance(example, dict) else None
+                if not isinstance(text, str) or not text.strip(): continue
+                while True:
+                    if not self._wait(self.idle, .5): return
+                    try:
+                        lane.generate([ChatMessage('system', 'Use this earlier dialogue as a training scenario. Continue with a short new assistant reply.'),
+                            ChatMessage('user', text[:2000])], max_output_tokens=96, emotion_turn_id='replay-' + str(uuid.uuid4()),
+                            cancelled=lambda: self.closed)
+                        break
+                    except BackgroundPreempted:
+                        if self.closed: return  # else a live request took the slot: run this example again once idle
+                # Finish this group's labels before the next one.
+                if not self._wait(lambda: not self.pending, .1): return
+        except Exception:
+            logger.exception('Expression example replay failed')
+            self.error = 'Example replay failed; see the diagnostic log.'
+        finally: self.replaying = False
 
     def training_due(self):
         if not self.idle(): self.idle_since=None; return False
@@ -227,7 +305,7 @@ class EmotionProbe:
                 self.samples[index]=(row[0],target,row[2]);found=True
             if not found: raise ValueError('Sample is no longer available')
             self.metadata.setdefault(sample_id,{})['edited']=True
-            self.network=None;self.validation={};self.since_train=max(self.since_train,self.config.retrain_every)
+            self.network=None;self.validation={};self._dormant=None;self.since_train=max(self.since_train,self.config.retrain_every)
             self.data_revision=str(uuid.uuid4())
             self._save(list(self.samples))
             return self.status()
@@ -275,36 +353,90 @@ class EmotionProbe:
             if event.stream == 'assistant':
                 if self.active_group is not None and event.state.turn_id != self.active_group: return
                 if self.prediction_turn_id == event.state.turn_id: return
-            publish(event.state)
+        # Callbacks reach DesktopState and the session; never run them under the condition.
+        publish(event.state)
 
     def _publish(self, state, group, cancelled, *, fallback=False):
         with self.condition:
             if self.closed or cancelled() or self.active_group != group: return
             self.prediction_turn_id = None if fallback or state is None else group
             callback = self.on_fallback if fallback else self.on_prediction
-            if state is not None and callback: callback(replace(state, turn_id=group))
+        if state is not None and callback: callback(replace(state, turn_id=group))
+
+    def _load_artifact(self, path):
+        """Return a readable artifact dict, or None after setting the file aside (or blocking saves)."""
+        import torch
+        try:
+            saved = torch.load(path, map_location='cpu', weights_only=True)
+            if not isinstance(saved, dict): raise ValueError('Not an emotion probe artifact')
+            return saved
+        except Exception as exc:
+            self._quarantine(path, exc)
+            return None
+
+    def _quarantine(self, path, exc):
+        if path == self.legacy_path:
+            # Legacy storage is read-only discovery: saves never write there, so leave it alone.
+            self.error = f'Ignored unreadable legacy probe file {path.name} ({exc})'
+            logger.warning('Ignoring unreadable legacy emotion probe file %s', path, exc_info=exc)
+            return
+        logger.warning('Unreadable emotion probe file %s', path, exc_info=exc)
+        related = [path, path.with_name('examples.json')] if path == self.data_path and self.data_path != self.path else [path]
+        if all(self._set_aside(item) for item in related):
+            self.error = f'Unreadable probe file kept as a backup: {path.name} ({exc})'
+        else:
+            self.error = self.save_blocked = f'Could not read or set aside {path.name}; probe data is not saved until it is readable'
+
+    def _set_aside(self, path):
+        """Move an unreadable file out of the way so later saves cannot overwrite it."""
+        if not path.exists(): return True
+        target = path.with_name(f'{path.name}.unreadable-{time.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:6]}')
+        try: path.replace(target)
+        except OSError:
+            logger.exception('Could not set aside %s', path)
+            return False
+        logger.warning('Kept unreadable emotion probe file as %s', target)
+        return True
 
     def _restore(self):
-        source = self.data_path if self.data_path.exists() else self.path if self.path.exists() else self.legacy_path
-        if source is None or not source.exists(): return
+        # Fail closed: unreadable files are set aside or block saving, never silently overwritten.
+        source = next((path for path in (self.data_path, self.path, self.legacy_path) if path is not None and path.exists()), None)
+        if source is None: return
+        def fall_back():
+            # training.pt was set aside, but the trained weights in probe.pt may still be fine.
+            if source == self.data_path and self.data_path != self.path and not self.save_blocked: self._restore()
+        saved = self._load_artifact(source)
+        if saved is None: return fall_back()
+        if saved.get('identity') != self.identity: return
+        weights, weights_validation = saved.get('weights'), saved.get('validation')
+        if source == self.data_path and self.data_path != self.path and self.path.exists():
+            artifact = self._load_artifact(self.path)
+            if artifact is not None and artifact.get('identity') == self.identity:
+                weights, weights_validation = artifact.get('weights'), artifact.get('validation')
         try:
-            import torch
-            saved = torch.load(source, map_location='cpu', weights_only=True)
-            if saved['identity'] != self.identity: return
-            self.samples.extend(saved['samples'][-self.config.max_samples:])
-            self.since_train = min(len(self.samples), saved.get('since_train', len(self.samples)))
-            self.validation = saved['validation']
-            self.metadata = saved.get('metadata', {})
-            if source == self.data_path and self.data_path != self.path and self.path.exists():
-                artifact = torch.load(self.path, map_location='cpu', weights_only=True)
-                if artifact.get('identity') == self.identity:
-                    saved['weights'] = artifact.get('weights')
-            if saved.get('weights') is not None and qualified(self.validation, self.config):
+            samples, since_train, metadata = [], 0, {}
+            if 'samples' in saved: # A weights-only probe.pt has no samples, metadata or since_train.
+                samples = list(saved['samples'])[-self.config.max_samples:]
+                since_train = min(len(samples), int(saved.get('since_train', len(samples))))
+                metadata = dict(saved.get('metadata') or {})
+            validation = dict(saved.get('validation') or {})
+        except Exception as exc:
+            self._quarantine(source, exc)
+            return fall_back()
+        self.samples.extend(samples)
+        self.since_train, self.metadata, self.validation = since_train, metadata, validation
+        if weights is not None:
+            try:
+                weights_validation = dict(weights_validation or {})
+                if not qualified(weights_validation, self.config): raise ValueError('below the configured quality thresholds')
                 network = build_network(self.config)
-                network.load_state_dict(saved['weights'])
-                self.network = network.eval().requires_grad_(False)
-        except Exception:
-            logger.warning('Ignoring incompatible emotion probe artifact', exc_info=True)
+                network.load_state_dict(weights)
+                self.network, self.validation = network.eval().requires_grad_(False), weights_validation
+            except Exception as exc:
+                # Unused now (stricter thresholds or incompatible), but still the user's trained
+                # weights: keep writing them back so a later save cannot erase the only copy.
+                self._dormant = (weights, weights_validation)
+                logger.warning('Trained emotion probe weights not loaded (%s); keeping them on disk', exc)
 
     def _run(self):
         try: self._work()
@@ -391,6 +523,7 @@ class EmotionProbe:
                 if qualified(result, self.config) and (incumbent is None or result['macro_f1'] >= incumbent['macro_f1']):
                     self.network = network
                     self.validation = result
+                    self._dormant = None
                 elif self.network is None: self.validation = result
                 self.since_train = 0
             self._save(data)
@@ -399,18 +532,24 @@ class EmotionProbe:
 
     def _save(self, samples):
         import torch
+        if self.save_blocked:
+            logger.warning('Emotion probe not saved: %s', self.save_blocked)
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.data_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
         with self.save_lock:
+            weights = {key: value.cpu() for key, value in self.network.state_dict().items()} if self.network is not None else None
+            artifact_validation = self.validation
+            if weights is None and self._dormant: weights, artifact_validation = self._dormant
             dataset = {'identity': self.identity, 'samples': samples, 'validation': self.validation, 'since_train': self.since_train,
-                'metadata':self.metadata,
-                'weights': {key: value.cpu() for key, value in self.network.state_dict().items()} if self.network is not None else None}
+                'metadata':self.metadata, 'weights': weights}
             if self.data_path != self.path:
                 data_temporary = self.data_path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
                 torch.save({key: value for key, value in dataset.items() if key != 'weights'}, data_temporary)
                 data_temporary.replace(self.data_path)
                 artifact = {key: value for key, value in dataset.items() if key not in {'samples', 'metadata', 'since_train'}}
+                artifact['validation'] = artifact_validation
             else:
                 artifact = dataset
             torch.save(artifact, temporary)

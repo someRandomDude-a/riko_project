@@ -7,20 +7,24 @@ from collections import deque
 from pathlib import Path
 from typing import Callable
 
+from ..kernel.model_pins import JULIA_MODEL_ID, JULIA_REVISION
+from ..kernel.torch_device import validate as validate_device
+from . import teacher
 from .models import EMOTIONS, EmotionEvent, EmotionState
+from .teacher import load_julia  # noqa: F401  (its old home: tests/test_torch_device.py imports it from here)
 
 logger = logging.getLogger(__name__)
 
 
 class JuliaEmotionEngine:
-    """Iterative emotional interpreter for Julia 1; CPU by default, CUDA opt-in.
+    """Iterative emotional interpreter for Julia 1; CPU by default, CUDA (or auto) opt-in.
 
     The engine stores a rolling transcript made from user and assistant deltas.
     It evaluates that window after meaningful deltas rather than retaining the
     whole conversation or waiting for a completed turn.
     """
 
-    def __init__(self, model_path: str | Path | None, *, model_id: str = "SupersonicLabs/Julia-1",
+    def __init__(self, model_path: str | Path | None, *, model_id: str = JULIA_MODEL_ID, revision: str = JULIA_REVISION,
                  cache_dir: str | Path | None = None,
                  device: str = "cpu", strict_encoding: bool = True, max_length: int = 8192,
                  context_tokens: int = 1024,
@@ -28,10 +32,9 @@ class JuliaEmotionEngine:
                  on_event: Callable[[EmotionEvent], None] | None = None,
                  fallback: bool = True):
         self.model_path = Path(model_path).expanduser() if model_path else None
-        self.model_id = model_id
+        self.model_id, self.revision = model_id, revision
         self.cache_dir = Path(cache_dir).expanduser() if cache_dir else None
-        self.device = device
-        if device not in {'cpu', 'cuda', 'cuda:0'}: raise ValueError('Unsupported Julia device')
+        self.device, self.active_device = validate_device(device), None
         self.strict_encoding = strict_encoding
         self.max_length = max_length
         self.context_tokens = max(128, context_tokens)
@@ -44,6 +47,7 @@ class JuliaEmotionEngine:
         self._pending_tokens = 0
         self._model = None
         self._load_attempted = False
+        self._resolved_source = None
         self._lock = threading.RLock()
         self.state = EmotionState(turn_id=self.turn_id)
 
@@ -52,31 +56,38 @@ class JuliaEmotionEngine:
             return self._model
         self._load_attempted = True
         try:
-            from importlib import import_module
-            if self.model_path and self.model_path.exists():
-                source = str(self.model_path)
+            manifest = None  # the user's own folder: its code is theirs, so it is not checked
+            if self.model_path and self.model_path.exists(): source = str(self.model_path)
             else:
-                # Download once to the standard Hugging Face cache. No clone,
-                # checked-in model directory, or manual model installation is needed.
-                from huggingface_hub import snapshot_download
-                source = snapshot_download(self.model_id, cache_dir=str(self.cache_dir) if self.cache_dir else None)
-            # Julia's native runtime is shipped with the model repository. Add
-            # the cached snapshot to import search rather than installing it.
-            import sys
-            if source not in sys.path:
-                sys.path.insert(0, source)
-            julia = import_module("julia")
+                # Downloaded once into the Hugging Face cache at the pinned commit, its bundled code checked before it runs.
+                source = teacher.snapshot(self.model_id, self.revision, self.cache_dir)
+                manifest = teacher.verify(source, self.model_id, self.revision)
             self._resolved_source = source
-            self._model = julia.load_model(source, device=self.device, strict_encoding=self.strict_encoding,
-                                           max_length=self.max_length,
-                                            head_length=max(128, self.max_length - self.context_tokens))
-            from .compat import compatible_engine
-            compatible_engine(self._model)
+            self._model, self.active_device = teacher.shared_model(source, self.device, manifest=manifest, **self.load_options)
         except Exception as exc:
             if not self.fallback:
                 raise RuntimeError(f"Unable to load Julia 1 emotion model: {exc}") from exc
             logger.warning("Julia 1 model unavailable; using fallback emotion interpreter: %s", exc)
         return self._model
+
+    @property
+    def load_options(self) -> dict:
+        """Julia's load_model options for this engine; memory's System 1 shares the model when it asks for the same."""
+        return {'strict_encoding': self.strict_encoding, 'max_length': self.max_length,
+            'head_length': max(128, self.max_length - self.context_tokens)}
+
+    def ensure_loaded(self):
+        """Load the model now rather than at its first use, once; the model, or None when it fell back."""
+        with self._lock: return self._load_model()
+
+    @property
+    def resolved_source(self) -> str | None:
+        """The directory or file the model loaded from (a Hugging Face snapshot unless model_path exists); None before."""
+        return self._resolved_source
+
+    def question_set(self) -> dict:
+        """The questions every interpretation and probe label asks (a fresh copy)."""
+        return self._questions()
 
     def start_turn(self, turn_id: str | None = None) -> None:
         with self._lock:
@@ -168,7 +179,7 @@ class JuliaEmotionEngine:
         try:
             self._trim_window()
             response = model.predict(state=self._transcript(), questions=self._questions())
-            logger.debug('Julia interpretation duration_s=%.3f device=%s', time.perf_counter()-started, self.device)
+            logger.debug('Julia interpretation duration_s=%.3f device=%s', time.perf_counter()-started, self.active_device)
             return self._parse_julia_result(response, stream)
         except Exception as exc:
             logger.warning("Julia 1 interpretation failed: %s", exc)
@@ -217,10 +228,10 @@ class JuliaEmotionEngine:
                 logger.warning('Julia probe supervision failed', exc_info=True)
                 return None
 
-    def probe_fingerprint(self):
-        """Detect local weight, tokenizer or runtime changes at the same path."""
+    def fingerprint(self):
+        """Detect local weight, tokenizer or runtime changes at the same path (the probe's identity records it)."""
         import hashlib
-        source = getattr(self, '_resolved_source', None)
+        source = self._resolved_source
         if not source: return None
         root = Path(source)
         files = [root] if root.is_file() else sorted(path for path in root.rglob('*')

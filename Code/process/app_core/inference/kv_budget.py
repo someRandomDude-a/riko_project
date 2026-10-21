@@ -1,7 +1,6 @@
 """The allocation recommendation is configured demand, not a VRAM-fit ceiling."""
 def suggested_pool(config):
-    initiative = getattr(config, 'initiative_n_ctx', 4096)
-    reflection = getattr(config, 'reflection_n_ctx', 4096)
+    initiative, reflection = config.initiative_n_ctx, config.reflection_n_ctx
     background_slots = config.parallel_slots - 1
     background = max(reflection * background_slots, initiative + reflection * (background_slots - 1))
     return config.n_ctx + background if config.kv_unified else max(config.n_ctx, initiative, reflection) * config.parallel_slots

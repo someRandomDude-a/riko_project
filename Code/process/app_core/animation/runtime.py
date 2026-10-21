@@ -9,7 +9,7 @@ import time
 from .library import AnimationLibrary, BONES, validate_settings
 from .policy import AnimationState, eligible_intents, motion_intent
 from ..events.bus import event_bus
-from ..runtime.workers import DaemonExecutor
+from ..kernel.workers import DaemonExecutor
 
 
 class AnimationRuntime:
@@ -149,10 +149,9 @@ class AnimationRuntime:
     def _observe(self):
         now = time.monotonic()
         desktop = self.session.state.snapshot()
-        with self.session._voice_lock:
-            voice = {'listening': self.session._voice_status == 'ready' and desktop['mic'],
-                     'user_speaking': self.session._user_speaking, 'speaking': self.session._playing is not None,
-                     'generating': self.session._generation_active, 'pending_audio': self.session._speech_pending > 0}
+        status = self.session.status()  # the session's one reading of busy and idle, shared with wake feedback
+        voice = {'listening': status.listening, 'user_speaking': status.user_speaking, 'speaking': status.speaking,
+                 'generating': status.generating, 'pending_audio': status.pending_audio > 0}
         with self.lock:
             if now - self.interaction_state['updated'] > 2:
                 self.interaction_state.update(held=False, near=False, pointer=None)
@@ -161,8 +160,7 @@ class AnimationRuntime:
             caps = deepcopy(self.capabilities)
         event = interaction['event'] if now < interaction['until'] else ''
         mode = ('held' if interaction['held'] else event if event else 'sleeping' if desktop['sleep'] else
-                'walking' if moving else 'speaking' if voice['speaking'] else 'tool' if any(t['status'] == 'running' for t in desktop['tools']) else
-                'thinking' if voice['generating'] or voice['pending_audio'] else 'listening' if voice['user_speaking'] else 'idle')
+                'walking' if moving else status.model_state(tool_running=any(t['status'] == 'running' for t in desktop['tools'])))
         emotion = desktop['emotion'] or {}
         state = AnimationState(0, mode, emotion.get('primary', 'neutral'), emotion.get('intensity', .5),
             geometry=desktop['avatar_geometry'], interaction=interaction, bones=caps['bones'], expressions=caps['expressions'], voice=voice)

@@ -10,6 +10,15 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 
+def auth_headers():
+    """This backend start's API token, read on every request and reconnect because it changes on
+    every backend restart. The launcher passes it as RIKO_API_TOKEN; a hand-started bot reads it
+    from the shared data root."""
+    from ...desktop.api_guard import client_token
+    token = client_token()
+    return {'Authorization': 'Bearer ' + token} if token else {}
+
+
 class BackendError(RuntimeError):
     def __init__(self, status, detail):
         super().__init__(detail)
@@ -39,11 +48,13 @@ class BackendClient:
 
     async def request(self, method, path, *, body=None, data=None, binary=False):
         if self.http is None: raise BackendError(503, 'Backend connection is not open')
-        headers = {'Content-Type': 'application/octet-stream'} if data is not None else None
+        headers = {**auth_headers(), **({'Content-Type': 'application/octet-stream'} if data is not None else {})}
         try:
             async with self.http.request(method, self.base_url + path, json=body, data=data, headers=headers) as response:
                 if response.status >= 400:
                     detail = 'Companion backend unavailable; check the Python server.'
+                    if response.status in {401, 403}: detail = 'The companion backend refused this client; restart Discord from the desktop app.'
+                    if response.status == 428: detail = 'This change must be confirmed in the Riko desktop window.'
                     if response.status in {400, 409, 413, 415, 422}:
                         with contextlib.suppress(ValueError, aiohttp.ContentTypeError):
                             detail = str((await response.json()).get('detail', detail))[:1000]
@@ -61,7 +72,8 @@ class BackendClient:
     async def _events(self):
         while not self.closed:
             try:
-                async with self.http.ws_connect(self.base_url + '/ws/discord/client?instance=' + self.instance, max_msg_size=4 * 1024 * 1024) as socket:
+                async with self.http.ws_connect(self.base_url + '/ws/discord/client?instance=' + self.instance, max_msg_size=4 * 1024 * 1024,
+                        headers=auth_headers()) as socket:
                     self.socket = socket
                     async for message in socket:
                         if message.type != aiohttp.WSMsgType.TEXT: continue

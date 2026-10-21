@@ -1,4 +1,4 @@
-from process.app_core.inference.metrics import InferenceMetrics
+from process.app_core.kernel.metrics import InferenceMetrics
 from process.app_core.configuration.debug_logging import SafeFormatter
 import logging
 

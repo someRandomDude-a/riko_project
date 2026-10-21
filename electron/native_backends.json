@@ -1,0 +1,74 @@
+{
+  "about": "The native llama.cpp bundles a packaged app can ship, as resources/native/<id>/<library>. Read by electron/native_backends.cjs (first-run setup), Code/process/app_core/configuration/native_backends.py (runtime.native_library: bundled:<id>; the frozen backend carries a copy) and tools/release/build.py. Backends are in preference order: setup preselects the first one shipped for the OS whose required detection, if any, found hardware. An optional backend (hip) is left out of a default release: tools/release/build.py stages it only when asked (RIKO_OPTIONAL_BUNDLES; release.yml's hip input), and setup offers it only when its bundle is installed and its detection found hardware. Detection runs command with args, then each fallback argv until one answers; with a pattern, only the output lines matching it count, and they are what setup shows. A build turns its backend's cmake_switch ON and every other backend's OFF, then adds cmake_flags. With -DGGML_BACKEND_DL=ON among them, ggml's backends ship as modules beside the library (Code/process/app_core/configuration/native_backends.py backend_modules names them) that riko-native loads from its own folder, and the release check requires a CPU module to load from there.",
+  "platforms": {
+    "win32": {"library": "riko-native.dll", "shared_libraries": ["*.dll"]},
+    "linux": {"library": "libriko-native.so", "shared_libraries": ["*.so", "*.so.*"], "rpath": "$ORIGIN"},
+    "darwin": {"library": "libriko-native.dylib", "shared_libraries": ["*.dylib"], "rpath": "@loader_path"}
+  },
+  "backends": [
+    {
+      "id": "cuda",
+      "label": "CUDA",
+      "description": "preferred for NVIDIA",
+      "platforms": ["win32", "linux"],
+      "cmake_switch": "GGML_CUDA",
+      "cmake_flags": ["-DCMAKE_CUDA_FLAGS=--diag-suppress=221", "-DGGML_CUDA_NO_VMM=ON", "-DGGML_BACKEND_DL=ON", "-DGGML_CPU_ALL_VARIANTS=ON"],
+      "notes": "Upstream uses -INFINITY as a max-reduction sentinel and MSVC's expansion triggers NVCC #221 repeatedly, so it is suppressed and the upstream code kept. Without GGML_CUDA_NO_VMM, ggml-cuda links the driver library (nvcuda.dll, libcuda.so.1) directly, so the bundle could not load at all without an NVIDIA driver, as on CI runners; cudart still loads the driver when CUDA starts. The cost: the CUDA memory pool grows with cudaMalloc instead of virtual-memory mappings. GGML_BACKEND_DL with GGML_CPU_ALL_VARIANTS, as llama.cpp's own x64 releases build: ggml's backends become modules (ggml-cuda, and one ggml-cpu-<isa> per x86 level from plain x64 to AVX-512) that riko-native loads from its own folder, picking the best CPU build this processor runs; a single CPU backend built with GGML_NATIVE=OFF assumes AVX2, FMA, F16C and BMI2, and older or low-end x86 CPUs died with an illegal instruction.",
+      "detect": {
+        "command": "nvidia-smi",
+        "args": ["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"],
+        "label": "NVIDIA GPU (nvidia-smi)",
+        "missing": "No NVIDIA GPU detected via nvidia-smi",
+        "required": true
+      }
+    },
+    {
+      "id": "hip",
+      "label": "ROCm (HIP)",
+      "description": "AMD GPU with ROCm 7 installed",
+      "platforms": ["linux"],
+      "optional": true,
+      "cmake_switch": "GGML_HIP",
+      "cmake_flags": ["-DGPU_TARGETS=gfx908;gfx90a;gfx942;gfx950;gfx1030;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201", "-DGGML_BACKEND_DL=ON", "-DGGML_CPU_ALL_VARIANTS=ON"],
+      "rpath": "/opt/rocm/lib",
+      "system_libraries": ["libamdhip64.so*", "libhipblas.so*", "librocblas.so*"],
+      "notes": "Opt-in: built only in the rocm/dev-ubuntu-22.04 7.2.1 container (.github/actions/hip-bundle), compile-checked by rocm-compile.yml (started by hand) and shipped in the Linux packages only when release.yml runs with its hip input; no CI runner has an AMD GPU, so nothing tests it on one. ggml-hip links the user's ROCm (libamdhip64.so.7, hipBLAS, rocBLAS of ROCm 7.x), which is not redistributed: rocBLAS's kernels alone are gigabytes. /opt/rocm/lib follows $ORIGIN in the rpath because AMD's packages leave it out of the loader's path unless ldconfig is configured; distribution ROCm packages install into the default path. Without ROCm 7 the module does not load, llama.cpp runs on the CPU and riko_create's notes say so; Vulkan runs AMD GPUs without ROCm and stays the default for them. GPU_TARGETS is llama.cpp's own list for its ROCm 7.2.1 image at the pin (.devops/rocm.Dockerfile, which follows rocBLAS's supported architectures) plus gfx950: CDNA gfx908 (MI100), gfx90a (MI200), gfx942 (MI300), gfx950 (MI350); RDNA2 gfx1030 (RX 6800/6900, W6800); RDNA3 gfx1100/gfx1101/gfx1102 (RX 7900/7800/7700/7600); RDNA3.5 gfx1150/gfx1151 (Ryzen AI 300, Ryzen AI Max); RDNA4 gfx1200/gfx1201 (RX 9060/9070). Other RDNA2/RDNA3 chips (gfx1031-gfx1036, gfx1103) are outside ROCm's support list: HSA_OVERRIDE_GFX_VERSION=10.3.0 or 11.0.0 runs them on the gfx1030 or gfx1100 code, otherwise use Vulkan; detection offers HIP only when every rocminfo GPU agent is one of these targets and ROCm 7's libamdhip64.so.7 is installed, so setup never preselects a bundle that would abort. GGML_HIP_NO_VMM and GGML_HIP_GRAPHS keep llama.cpp's defaults (ON). Modules and CPU variants as for cuda.",
+      "detect": {
+        "command": "rocminfo",
+        "args": [],
+        "fallbacks": [["/opt/rocm/bin/rocminfo"]],
+        "pattern": "^Name:\\s+gfx[0-9a-f]{3,4}$",
+        "targets": "GPU_TARGETS",
+        "runtime": ["/opt/rocm/lib/libamdhip64.so.7", "/usr/lib/x86_64-linux-gnu/libamdhip64.so.7", "/usr/lib64/libamdhip64.so.7"],
+        "label": "AMD GPU supported by the ROCm bundle (rocminfo)",
+        "missing": "No AMD GPU this ROCm bundle was built for, with a working ROCm 7 runtime (rocminfo, libamdhip64.so.7); Vulkan runs every AMD GPU without ROCm",
+        "required": true
+      }
+    },
+    {
+      "id": "vulkan",
+      "label": "Vulkan",
+      "description": "AMD/Intel/NVIDIA",
+      "platforms": ["win32", "linux"],
+      "cmake_switch": "GGML_VULKAN",
+      "cmake_flags": ["-DGGML_BACKEND_DL=ON", "-DGGML_CPU_ALL_VARIANTS=ON"],
+      "notes": "Modules and CPU variants as for cuda. Only the ggml-vulkan module needs the system Vulkan loader (vulkan-1.dll, libvulkan.so.1): without one riko-native still loads, llama.cpp runs on the CPU and riko_create's notes say that no GPU device loaded.",
+      "detect": {
+        "command": "vulkaninfo",
+        "args": ["--summary"],
+        "label": "Vulkan detection",
+        "missing": "Vulkan enumeration unavailable; driver support must be checked",
+        "required": false
+      }
+    },
+    {
+      "id": "metal",
+      "label": "Metal",
+      "description": "Apple silicon GPU",
+      "platforms": ["darwin"],
+      "cmake_switch": "GGML_METAL",
+      "cmake_flags": ["-DGGML_METAL_EMBED_LIBRARY=ON", "-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0"],
+      "notes": "The embedded shader library needs no Metal toolchain or default.metallib at run time (built and run on Apple silicon at the current llama.cpp pin). macOS 14.0 is the oldest the frozen backend runs on (the locked torch, numpy, scipy, onnxruntime and av wheels), so the library targets it rather than the build host's macOS; electron-builder.yml's mac.minimumSystemVersion matches. The backends stay linked (no GGML_BACKEND_DL): every Apple silicon Mac runs the arm64 CPU code, and the modules would need a .so pattern for darwin."
+    }
+  ]
+}

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import math
 import uuid
 
+from ..kernel.audio_config import FRAME_SECONDS
+
 
 @dataclass
 class Segment:
@@ -27,7 +29,7 @@ class VoiceSegments:
         self.partial_interval = partial_interval
         self.on_segment, self.on_start, self.on_activity = on_segment, on_start, on_activity
         self.gap, self.endpoint, self.max_segment = gap, endpoint, max_segment
-        self.pre_roll = deque(maxlen=max(1, math.ceil(pre_roll / 0.032)))
+        self.pre_roll = deque(maxlen=max(1, math.ceil(pre_roll / FRAME_SECONDS)))
         self.capture_boundary = None
         self.wait_for_silence = False
         self.activation_silence = 0.0
@@ -51,10 +53,10 @@ class VoiceSegments:
         self.anchor = None
 
     def feed(self, frame, speaking, timestamp):
-        if self.capture_boundary and timestamp - 0.032 < self.capture_boundary[0]:
+        if self.capture_boundary and timestamp - FRAME_SECONDS < self.capture_boundary[0]:
             return  # Discard queued frames, including one straddling activation.
         if self.wait_for_silence:
-            self.activation_silence = 0.0 if speaking else self.activation_silence + 0.032
+            self.activation_silence = 0.0 if speaking else self.activation_silence + FRAME_SECONDS
             if self.activation_silence >= 0.32: self.wait_for_silence = False
             return  # A rolling wake match may finish before the keyword does.
         if self.utterance_id is None:
@@ -62,20 +64,20 @@ class VoiceSegments:
                 self.pre_roll.append(frame)
                 return
             self.utterance_id = str(uuid.uuid4())
-            self.started_at = timestamp - 0.032
+            self.started_at = timestamp - FRAME_SECONDS
             self.anchor = self.on_start()
             self.audio = list(self.pre_roll)
             self.pre_roll.clear()
         self.audio.append(frame)
-        self.segment_seconds += 0.032
-        self.partial_elapsed += 0.032
+        self.segment_seconds += FRAME_SECONDS
+        self.partial_elapsed += FRAME_SECONDS
         if speaking:
-            self.voiced += 0.032
+            self.voiced += FRAME_SECONDS
             self.silence = 0.0
             self.ended_at = timestamp
             self.on_activity(self.voiced, self.anchor)
         else:
-            self.silence += 0.032
+            self.silence += FRAME_SECONDS
         if self.silence >= self.endpoint:
             self._emit(True)
             self.reset()

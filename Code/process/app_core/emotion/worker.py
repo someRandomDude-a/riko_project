@@ -27,11 +27,9 @@ class EmotionWorker:
                 self.revision += 1
                 self.generated = ''
                 self.playback = False
-                self.engine.playback_active = False
             if kind == 'speech':
                 self.revision += 1
                 self.playback = True
-                self.engine.playback_active = True
                 self.generated = ''
                 self.pending = [job for job in self.pending if job[0] not in {'output','speech'}]
             if kind == 'output' and self.playback: return
@@ -40,6 +38,11 @@ class EmotionWorker:
                 text = previous[1] + text
             self.pending.append((kind, text, final))
             self.condition.notify()
+
+    def playback_active(self):
+        """Whether the sentences being spoken, not the generated text, drive the expression this turn (factory.py's probe
+        then holds its own readings back). A lock-free read: the probe asks from its own threads."""
+        return self.playback
 
     def generation(self, delta, final=False):
         with self.condition:

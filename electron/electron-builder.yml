@@ -5,6 +5,7 @@ directories:
   output: release
 files:
   - '*.cjs'
+  - native_backends.json  # electron/native_backends.cjs requires it
   - dist/**
   - package.json
 extraResources:
@@ -33,3 +34,28 @@ linux:
       arch: [x64]
   category: Utility
   maintainer: Riko contributors
+  # The overlay needs window positioning, always-on-top and pointer forwarding, which native Wayland ignores; run under XWayland.
+  executableArgs: ['--ozone-platform=x11']  # deb launcher
+# A granted microphone (macOS TCC) must not be usable by other local processes that relaunch Riko as plain Node.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+  category: public.app-category.utilities
+  icon: ../release-stage/mac/icon.icns  # tools/release/build.py renders it from assets/logo.svg
+  # The frozen backend's locked wheels (torch, numpy, scipy, onnxruntime, av) need macOS 14; the Metal bundle targets it too.
+  minimumSystemVersion: '14.0'
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Signs ad hoc unless a Developer ID certificate is configured (CSC_LINK); notarizes only with APPLE_* credentials.
+  sign: ./build/mac_sign.cjs
+  extendInfo:
+    NSMicrophoneUsageDescription: Riko listens for its wake word and your voice after you turn the microphone on.
+appImage:
+  # Replaces electron-builder's default '--no-sandbox', which Ubuntu 24.04+ needs for AppImages, so keep it.
+  executableArgs: ['--no-sandbox', '--ozone-platform=x11']

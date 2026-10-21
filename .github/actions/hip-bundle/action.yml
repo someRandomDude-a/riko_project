@@ -1,0 +1,42 @@
+name: HIP bundle
+description: >-
+  The opt-in hip bundle (electron/native_backends.json), built by tools/release/build.py --smoke-bundle exactly as a release
+  builds a bundle, inside the job's rocm/dev-ubuntu-22.04 container, then checked there without a GPU: the rpath that finds
+  AMD's ROCm, and build.py --check-bundle (the six exports and riko_devices' device list, a CPU module from the bundle,
+  ggml-hip loading against ROCm 7.2.1). rocm-compile.yml's compile job and release.yml's opt-in hip job both run it, so
+  the compile job proves the release's recipe; neither runs a model on an AMD GPU.
+inputs:
+  destination:
+    description: The bundle folder, relative to the workspace and named hip (container jobs see runner.temp under another path)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: ROCm build dependencies
+      # The image has ROCm 7.2.1's compilers and Python 3.10, and its apt source is that release's repository, signed by AMD.
+      shell: bash
+      run: |
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git cmake hipblas-dev rocblas-dev
+        git config --global --add safe.directory '*'
+    - name: llama.cpp at the pin
+      shell: bash
+      run: |
+        pin=$(python3 -c "import runpy; print(runpy.run_path('tools/release/build.py')['PIN'])")
+        git init -q "$RUNNER_TEMP/llama.cpp-hip"
+        git -C "$RUNNER_TEMP/llama.cpp-hip" remote add origin https://github.com/ggml-org/llama.cpp
+        git -C "$RUNNER_TEMP/llama.cpp-hip" fetch -q --depth 1 origin "$pin"
+        git -C "$RUNNER_TEMP/llama.cpp-hip" -c core.autocrlf=false checkout -q --detach FETCH_HEAD
+    - name: Build the hip bundle
+      # CMake's HIP language takes ROCm's clang from HIPCXX, as llama.cpp's docs build it; ggml-hip for twelve GPU targets
+      # is the long part, so every core compiles.
+      shell: bash
+      run: |
+        export HIPCXX="$(/opt/rocm/bin/hipconfig -l)/clang" HIP_PATH="$(/opt/rocm/bin/hipconfig -R)" RIKO_BUILD_JOBS="$(nproc)"
+        python3 tools/release/build.py --smoke-bundle hip "$RUNNER_TEMP/llama.cpp-hip" "${{ inputs.destination }}"
+    - name: Check the hip bundle without a GPU
+      # The manifest's rpath: ggml-hip looks beside itself, then in /opt/rocm/lib, where AMD's packages put libamdhip64.
+      shell: bash
+      run: |
+        readelf -d "${{ inputs.destination }}/libggml-hip.so" | grep -E 'Library (runpath|rpath): \[\$ORIGIN:/opt/rocm/lib\]'
+        python3 tools/release/build.py --check-bundle "${{ inputs.destination }}/libriko-native.so"

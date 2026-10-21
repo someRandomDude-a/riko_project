@@ -4,23 +4,22 @@ import math
 from pathlib import Path
 import time
 
-from ..desktop.media import resolve_media
+from ..desktop.media import effects_directory, resolve_media
 from ..events.bus import event_bus
+from ..kernel.schema import Section, Setting, register
+from ..kernel.validation import boolean, number
 
-DEFAULTS = {'enabled': True, 'volume': .65, 'max_clip_seconds': 3.0,
-            'cooldown_seconds': .5, 'rules': []}
 STATES = {'idle', 'thinking', 'speaking', 'tool', 'sleeping', '*'}
 AUDIO_TYPES = {'.wav', '.flac', '.ogg'}
 
 
 def validate_settings(raw):
     if not isinstance(raw, dict): raise ValueError('wake_feedback must be a mapping')
-    settings = {**deepcopy(DEFAULTS), **raw}
-    if type(settings['enabled']) is not bool: raise ValueError('wake_feedback.enabled must be boolean')
-    for key, low, high in [('volume', 0, 1), ('max_clip_seconds', .1, 10), ('cooldown_seconds', 0, 30)]:
-        value = settings[key]
-        if type(value) not in (int, float) or not math.isfinite(value) or not low <= value <= high:
-            raise ValueError(f'wake_feedback.{key} must be between {low} and {high}')
+    # Other keys keep no value here: load_config reports them (configuration/schema.py unknown_settings).
+    settings = {**deepcopy(DEFAULTS), **{key: value for key, value in raw.items() if key in DEFAULTS}}
+    boolean('wake_feedback.enabled', settings['enabled'])
+    for spec in SETTINGS.settings:  # the ranges Settings offers are the ranges load_config accepts
+        if spec.range: settings[spec.key] = number(f'wake_feedback.{spec.key}', settings[spec.key], ge=spec.range[0], le=spec.range[1])
     rules = settings['rules']
     if not isinstance(rules, list) or len(rules) > 100: raise ValueError('wake_feedback.rules must be a list of at most 100 rules')
     for rule in rules:
@@ -40,6 +39,15 @@ def validate_settings(raw):
             if type(value) not in (int, float) or not math.isfinite(value) or not low <= value <= high:
                 raise ValueError(f'Invalid wake feedback {key}')
     return settings
+
+
+SETTINGS = register(Section('wake_feedback', group='voice', title='Wake acknowledgement', strict=True, check=validate_settings, settings=(
+    Setting('enabled', True), Setting('volume', .65, range=(0, 1), help='Default cue volume, 0–1. Respects the global audio toggle; avatar animation is independent.'),
+    Setting('max_clip_seconds', 3.0, range=(.1, 10),
+        help='Maximum local acknowledgement length. Longer clips are rejected; microphone capture continues. Through speakers the cue\'s echo can be heard as your request: use headphones, or voice.barge_in echo_gate or stop_only, which treat it as Riko\'s own audio.'),
+    Setting('cooldown_seconds', .5, range=(0, 30)),
+    Setting('rules', [], help='JSON list of emotion/state rules with local audio (.wav/.flac/.ogg) and animation (.vrma) paths. Exact state+emotion wins, then state, emotion and wildcard. Assets must be in approved media roots. No assets means silent.'))))
+DEFAULTS = SETTINGS.defaults()
 
 
 def select_rule(rules, emotion, model_state):
@@ -62,7 +70,7 @@ class WakeFeedback:
         if rule is None: return False
         self.last_trigger = now
         payload = {'emotion': emotion or 'neutral', 'model_state': model_state}
-        directory = self.config.raw.get('desktop', {}).get('effects_directory', 'effects/greenscreens')
+        directory = effects_directory(self.config.raw)
         # Treat each asset independently: a bad sound must not suppress animation.
         if rule.get('animation'):
             try:

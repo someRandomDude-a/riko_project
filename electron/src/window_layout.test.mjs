@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
-const {chatBounds,clampBounds}=createRequire(import.meta.url)('../window_layout.cjs');
+const {chatBounds,clampBounds,compactSize}=createRequire(import.meta.url)('../window_layout.cjs');
+const {gestureBounds}=createRequire(import.meta.url)('../window_gesture.cjs');
 const area={x:0,y:0,width:1920,height:1080},anchor={x:960,y:900},current={x:916,y:858,width:88,height:100};
 test('mini defaults to quarter display width with free height and a square minimum',()=>{
  const mini=chatBounds('compact',current,area,anchor);
@@ -25,4 +26,15 @@ test('bounds cannot leave the active display and mini remains square on short sc
  assert.deepEqual(clampBounds({x:-500,y:2000,width:200,height:300},area),{x:0,y:780,width:200,height:300});
  const mini=chatBounds('compact',current,{...area,height:600},anchor,{width:1000,height:300});
  assert.equal(mini.width,600);assert.equal(mini.height,600);
+});
+test('one size rule for the dock and mini chat, whichever way they are sized',()=>{
+ assert.deepEqual(compactSize('collapsed',area,40,999),{width:88,height:88});assert.deepEqual(compactSize('collapsed',area,300.4),{width:260,height:260});
+ assert.deepEqual(compactSize('compact',area,100,100),{width:320,height:320});assert.deepEqual(compactSize('compact',area,5000,5000),{width:1080,height:1080});
+ assert.deepEqual(compactSize('compact',area,480),{width:480,height:648},'a missing height is 1.35x the width');
+ // Wider than 6:1, a sixth of the width would be taller than the work area: the mini chat stays inside it.
+ const ultrawide={x:0,y:0,width:5120,height:700};
+ for(const width of [10,800,6000])assert.deepEqual(compactSize('compact',ultrawide,width,width),{width:700,height:700},String(width));
+ const gesture=gestureBounds({kind:'resize',mode:'compact',bounds:{x:0,y:0,width:700,height:700},cursor:{x:0,y:0}},{x:-500,y:0},ultrawide);
+ assert.deepEqual([gesture.width,gesture.height],[700,700]);
+ assert.deepEqual(chatBounds('compact',current,ultrawide,anchor,{width:100,height:100}).height,700);
 });

@@ -6,7 +6,7 @@ import {createServer} from 'vite';
 import {normalizePreferences} from './ui_preferences.mjs';
 import {settingsIndex} from './settings_search.mjs';
 import {readFile} from 'node:fs/promises';
-let server,Explanation,Context,Appearance,Tabs,DockControls,Message,StreamChat,AvatarStudio,DockVolume,SettingsPage,SettingsSearchResults;
+let server,Explanation,Context,Appearance,Tabs,DockControls,Message,StreamChat,AvatarStudio,DockVolume,SettingsPage,SettingsSearchResults,ErrorBoundary,GraphicsSettings;
 before(async()=>{
  server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom'});
  ({default:Explanation,ExplanationContext:Context}=await server.ssrLoadModule('/src/explanation.jsx'));
@@ -19,6 +19,8 @@ before(async()=>{
   ({DockVolume}=await server.ssrLoadModule('/src/dock_audio.jsx'));
   ({default:SettingsPage}=await server.ssrLoadModule('/src/settings_page.jsx'));
   ({SettingsSearchResults}=await server.ssrLoadModule('/src/settings_search.jsx'));
+  ({default:ErrorBoundary}=await server.ssrLoadModule('/src/error_boundary.jsx'));
+  ({default:GraphicsSettings}=await server.ssrLoadModule('/src/graphics_settings.jsx'));
 });
 after(async()=>{await server?.close();});
 test('simple explanations lead with guidance and technical notes can be opened by preference',()=>{
@@ -86,4 +88,17 @@ test('search results offer navigation and inline editors while honoring read-onl
  let rendered=0;const html=renderToStaticMarkup(React.createElement(SettingsSearchResults,{matches,active:0,labels:{models:'Models',appearance:'Desktop model'},preferences,catalog,updatePreferences:()=>{},onNavigate:()=>{},renderRuntime:(field,prefix)=>{rendered++;return React.createElement('input',{id:prefix+field.path,value:4096,readOnly:true});}}));
  assert.equal(rendered,1);assert.equal((html.match(/class="settings-search-jump"/g)||[]).length,3);
  assert.match(html,/Edit here · runtime draft/);assert.match(html,/Edit here · applies immediately/);assert.match(html,/Read-only · open to inspect/);assert.match(html,/Advanced/);assert.match(html,/value="25"/);
+});
+test('a window that fails to render shows a Reload card instead of going blank',()=>{
+ const child=React.createElement('p',null,'fine');
+ assert.equal(renderToStaticMarkup(React.createElement(ErrorBoundary,{route:'overlay'},child)),'<p>fine</p>');
+ assert.deepEqual(Object.keys(ErrorBoundary.getDerivedStateFromError(new Error('boom'))),['error']);
+ const boundary=new ErrorBoundary({route:'overlay',children:child});boundary.state={error:new Error('Cannot read properties of undefined')};
+ const html=renderToStaticMarkup(boundary.render());
+ assert.match(html,/role="alert"/);assert.match(html,/This window stopped working/);assert.match(html,/Cannot read properties of undefined/);assert.match(html,/>Reload<\/button>/);
+});
+test('the avatar frame rate is chosen in Avatar graphics: adaptive by default, or always full',()=>{
+ const html=renderToStaticMarkup(React.createElement(GraphicsSettings,{preferences:normalizePreferences({}),update:()=>{}}));
+ assert.match(html,/Avatar frame rate<select>/);assert.match(html,/<option value="adaptive" selected="">Adaptive/);assert.match(html,/<option value="full">Always/);
+ assert.match(renderToStaticMarkup(React.createElement(GraphicsSettings,{preferences:normalizePreferences({avatarGraphics:{frameRate:'full'}}),update:()=>{}})),/<option value="full" selected="">/);
 });

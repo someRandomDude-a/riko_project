@@ -1,16 +1,11 @@
 import io
 from pypdf import PdfReader
-from .base import BaseTool, ToolType
+from .base import BaseTool
 
 
 class Tool(BaseTool):
     TOOL_NAME = "pdf_extractor"
     TOOL_DESCRIPTION = "Extracts all text content from a PDF file sent by the user"
-    TOOL_TYPE = ToolType.RESOURCE
-
-    MCP_PROMPT = """pdf_extractor (resource):
-  This tool automatically processes PDF files attached by the user.
-"""
 
     def _call(self, file_bytes: bytes) -> str: # type: ignore
         """

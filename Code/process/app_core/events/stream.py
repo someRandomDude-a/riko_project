@@ -28,7 +28,8 @@ async def stream_events(websocket, bus, snapshot, *, initial=None, event_filter=
         except RuntimeError: pass
 
     async def send():
-        await websocket.send_json({'type': 'state.snapshot', 'payload': snapshot()})
+        # snapshot() takes session locks; never block the event loop (and every client) on them.
+        await websocket.send_json({'type': 'state.snapshot', 'payload': await asyncio.to_thread(snapshot)})
         watermark = 0
         if initial:
             watermark = bus.cursor()

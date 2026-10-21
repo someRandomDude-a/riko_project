@@ -6,8 +6,9 @@ import pytest
 
 from process.app_core.configuration.config import RuntimeConfig, MemoryConfig
 from process.app_core.inference.llama_native import InProcessLlamaProvider
-from process.app_core.inference.llama_context import SlotScheduler, native_arguments, BackgroundPreempted
-from process.app_core.conversation.messages import ChatMessage
+from process.app_core.inference.llama_context import SlotScheduler, native_arguments
+from process.app_core.kernel.cancellation import BackgroundPreempted
+from process.app_core.kernel.messages import ChatMessage
 
 
 def test_live_slot_is_never_used_by_background():
@@ -58,6 +59,8 @@ def test_server_flags_allocate_per_slot_context_and_one_model():
     assert args[args.index('--ctx-size')+1] == '12288'
     assert args[args.index('--parallel')+1] == '3'
     assert args[args.index('--cache-type-v')+1] == 'q8_0'
+    assert args[args.index('--flash-attn')+1] == 'on'
+    assert args[args.index('--fit')+1] == 'on'
     assert '--kv-unified' in args and '--no-context-shift' in args
 
 
@@ -133,7 +136,7 @@ def test_memory_dispatches_parallel_reflections_without_duplicate_sources(tmp_pa
     from process.app_core.persistence.memory import MemoryStore, MemoryRecord
     from types import SimpleNamespace
     config = MemoryConfig(store_file=tmp_path/'memory.json', embeddings_enabled=False, system1_enabled=False)
-    store = MemoryStore(config, reflection_provider=SimpleNamespace(owner=SimpleNamespace(reflection_parallelism=3)), start_worker=False)
+    store = MemoryStore(config, reflection_provider=SimpleNamespace(), parallelism=3, start_worker=False)
     entered = set(); ready = threading.Event(); release = threading.Event()
     def reflect(record):
         with store.lock:

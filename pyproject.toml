@@ -11,13 +11,22 @@ dependencies = ["pyyaml>=6.0", "ruamel.yaml>=0.18", "openai>=1.0"]
 
 [project.optional-dependencies]
 llama = ["huggingface_hub", "httpx"]
-desktop = ["fastapi>=0.115", "uvicorn>=0.30", "websockets>=12", "pillow>=10"]
+desktop = ["fastapi>=0.115", "uvicorn>=0.30", "websockets>=12", "pillow>=10", "httpx"]
 discord = ["discord.py>=2.7.1,<3", "python-dotenv>=1.0", "aiohttp>=3.9", "pypdf>=4"]
-test = ["pytest>=8.0"]
+# Exactly requirements-runtime.txt (tests/test_dependency_manifests.py keeps them equal). EfficientWord-Net
+# is installed separately with --no-deps; install_reqs.sh picks the PyTorch wheels for the machine.
+runtime = ["openai>=1.0", "pyyaml>=6.0", "ruamel.yaml>=0.18", "pypdf>=4", "huggingface_hub",
+    "sentence-transformers", "httpx", "numpy", "requests", "sounddevice", "soundfile", "torch",
+    "faster-whisper", "silero-vad", "scipy", "pillow>=10", "discord.py>=2.7.1,<3", "python-dotenv>=1.0", "aiohttp>=3.9",
+    "transformers", "fastapi>=0.115", "uvicorn>=0.30", "websockets>=12", "onnxruntime"]
+test = ["riko-companion[runtime]", "pytest>=8.0", "pytest-timeout>=2.3"]
 
 [tool.pytest.ini_options]
 pythonpath = ["Code"]
 testpaths = ["tests"]
+markers = [
+    "native: loads a real riko-native library and GGUF; skipped unless RIKO_TEST_NATIVE_LIBRARY and RIKO_TEST_GGUF are set (.github/workflows/native-smoke.yml)",
+]
 
 [tool.setuptools.packages.find]
 where = ["Code"]

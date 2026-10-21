@@ -1,15 +1,18 @@
-import {normalizeProfile,normalizeBone} from './avatar_studio_settings.mjs';
+import {normalizeProfile,normalizeBone,PICKUP_FIELDS,PICKUP_TOGGLES,GRAB_STYLES,RELEASE_STYLES,REACTION_FIELDS,REACTION_TOGGLES,FACE_FIELDS,GAZE_FIELDS,GAZE_TOGGLES} from './avatar_studio_settings.mjs';
 import {normalizeGraphics} from './avatar_graphics.mjs';
+import {FRAME_RATES} from './avatar_frame_rate.mjs';
 import {simpleLabel,simpleHelp} from './plain_language.mjs';
 import {parseSetting} from './settings_model.mjs';
 
 const studioNumbers={
  mouseSphere:[['dragSpring','Spring drag strength',0,100],['radius','Sphere radius (m)',.01,1],['depth','Sphere front depth (m)',-.5,.5],['strength','Sphere push strength',0,50],['frequency','Mouse follow frequency (Hz)',.5,20],['damping','Mouse follow damping',.1,2],['bounce','Click Z bounce (m)',0,.5],['bounceSeconds','Click bounce duration (s)',.1,2],['maxAngle','Sphere joint angular limit (degrees)',0,90]],
- gaze:[['strength','Convergence strength',0,3],['smoothing','Gaze smoothing response',1,30],['minDistance','Minimum eye target distance (m)',.05,1],['maxYaw','Maximum gaze yaw (degrees)',0,90],['maxPitch','Maximum gaze pitch (degrees)',0,60],['maxConvergence','Maximum convergence per eye (degrees)',0,30]],
- pickup:[['gravity','Gravity',0,30],['damping','Pickup damping',0,10],['bodySpring','Body follow spring',1,80],['inertia','Drag inertia',0,3],['maxSwing','Maximum body swing (degrees)',0,180],['jointLimit','Joint angular limit (degrees)',0,120],['distanceThreshold','Ragdoll distance threshold (px)',10,3000],['speedThreshold','Ragdoll speed threshold (px/s)',50,10000],['recoverySeconds','Recovery duration (seconds)',.2,10]],
- input:[['dragThreshold','Drag activation distance (px)',2,50],['hoverDelay','Delayed hover (ms)',0,5000]]
+ gaze:GAZE_FIELDS,
+ pickup:PICKUP_FIELDS,reactions:REACTION_FIELDS,
+ input:[['dragThreshold','Drag activation distance (px)',2,50],['hoverDelay','Delayed hover (ms)',0,5000]],
+ face:FACE_FIELDS
 };
-const studioToggles=[['debug','Show skeleton debug view'],['tPose','Preview calibrated T-pose (pauses animation playback)'],['mouseSphere.enabled','Enable mouse force sphere'],['mouseSphere.debug','Show mouse sphere'],['gaze.enabled','Enable mouse eye tracking'],['gaze.convergence','Enable distance-based pupil convergence'],['pickup.enabled','Enable articulated pickup'],['pickup.ragdollEnabled','Enable threshold ragdoll'],['effect.glslEnabled','Enable imported GLSL (trusted GPU code only)']];
+const studioToggles=[['debug','Show skeleton debug view'],['tPose','Preview calibrated T-pose (pauses animation playback)'],['mouseSphere.enabled','Enable mouse force sphere'],['mouseSphere.debug','Show mouse sphere'],['effect.glslEnabled','Enable imported GLSL (trusted GPU code only)'],...[['gaze',GAZE_TOGGLES],['pickup',PICKUP_TOGGLES],['reactions',REACTION_TOGGLES]].flatMap(([section,toggles])=>toggles.map(([key,label])=>[section+'.'+key,label]))];
+const studioSections={gaze:'Eye tracking & pupil convergence',pickup:'Pickup, throwing & landing',reactions:'Held reactions',input:'Mouse gestures',face:'Face & reactions',mouseSphere:'Spring dragging & mouse sphere'};
 const boneNumbers=[['amount','Motion blend',0,1],['frequency','Spring frequency (Hz)',.2,20],['damping','Damping ratio',0,2],['maxAngle','Maximum angular lag (degrees)',0,90]];
 const springNumbers=[['stiffness','VRM stiffness',0,10],['dragForce','VRM drag',0,1],['gravityPower','VRM gravity strength',0,5],['hitRadius','VRM collision radius (m)',0,.5]];
 const get=(object,path)=>path.split('.').reduce((value,key)=>value?.[key],object);
@@ -26,12 +29,14 @@ export function settingsIndex(fields,groups,catalog){
   items.push({id:'section:settings-neural',label:'Custom neural network settings',group:'neural',kind:'section',source:'section',help:'expression probe Julia agreement validation training idle dataset label editor replay examples',target:{group:'neural',sectionId:'settings-neural'}});
  local('avatarHitOutlines','Show hit-volume outlines','boolean','appearance',{section:'Interaction connections',target:{group:'appearance',label:'Show hit-volume outlines',sectionId:'appearance-avatar-hits'}});
  local('avatarGraphics.antialias','Canvas anti-aliasing','boolean','graphics');
+ local('avatarGraphics.frameRate','Avatar frame rate','string','graphics',{options:FRAME_RATES.map(([value])=>value),help:'fps refresh rate CPU battery power idle throttle '+FRAME_RATES.map(([value,text])=>value+': '+text).join('. ')});
  for(const [key,label,options] of [['samples','Effect-pass MSAA samples',[0,2,4,8]],['anisotropy','Anisotropic texture filtering',[1,2,4,8,16]],['pixelRatio','Maximum render pixel ratio',[1,1.5,2,3]]])local('avatarGraphics.'+key,label,'number','graphics',{options});
  if(catalog){
   const profile=(path,label,kind,options={})=>local('profile.'+path,label,kind,'appearance',{profilePath:path,...options});
   profile('springPickRadius','Spring selection radius (m)','number',{min:.005,max:.2,help:'Selection padding only; does not change physics colliders.'});
-  for(const [path,label] of studioToggles)profile(path,label,'boolean');
-  for(const [section,numbers] of Object.entries(studioNumbers))for(const [key,label,min,max] of numbers)profile(section+'.'+key,label,'number',{min,max,section:section==='gaze'?'Eye tracking & pupil convergence':section==='pickup'?'Pickup, ragdoll & recovery':section==='input'?'Mouse gestures':'Spring dragging & mouse sphere'});
+  for(const [path,label] of studioToggles)profile(path,label,'boolean',/^(pickup|reactions|gaze)\./.test(path)?{section:studioSections[path.split('.')[0]]}:{});
+  for(const [section,numbers] of Object.entries(studioNumbers))for(const [key,label,min,max] of numbers)profile(section+'.'+key,label,'number',{min,max,section:studioSections[section]});
+  for(const [key,label,options] of [['grabStyle','Grab style',GRAB_STYLES],['release','When you let go (release style)',RELEASE_STYLES]])profile('pickup.'+key,label,'string',{options:options.map(([value])=>value),help:options.map(([value,text])=>value+': '+text).join('. '),section:studioSections.pickup});
   for(const [key,label,min,max] of [['ambient','Ambient intensity',0,5]])profile('lighting.'+key,label,'number',{min,max,section:'Model-space lighting'});
   for(const [key,label,min,max] of [['exposure','Exposure multiplier',0,3],['saturation','Color saturation',0,2]])profile('effect.'+key,label,'number',{min,max,section:'Shader effects'});
   profile('effect.preset','Color effect','string',{options:['none','warm','cool','monochrome'],section:'Shader effects'});
@@ -43,7 +48,7 @@ export function settingsIndex(fields,groups,catalog){
   }
  }
  for(const [group,label] of groups)items.push({id:'category:'+group,label,group,kind:'section',source:'section',section:'Category',target:{group}});
- for(const [group,label,sectionId,keywords] of [['appearance','Model & animation library','desktop-model-library','VRM VRMA import model animation clips'],['appearance','Interaction connections','appearance-avatar-hits','click hold release hover delayed expressions outline filters'],['appearance','Physics, calibration & effects','appearance-avatar-studio','spring bones T-pose lighting GLSL ragdoll eye gaze IPD'],['interface','Conversation shortcuts','settings-shortcuts','quick actions message shortcuts'],['voice','Live calibration & detector testing','settings-voice-live','microphone wake word VAD'],['initiative','Live initiative preferences & event rules','settings-initiative-live','proactive conversation'],['appearance','Live monitor & surface placement','settings-display-live','display monitor position'],['tools','Tool approvals & permissions','settings-tool-approvals','approval safety tasks']])items.push({id:'section:'+sectionId,label,group,kind:'section',source:'section',help:keywords,target:{group,sectionId}});
+ for(const [group,label,sectionId,keywords] of [['appearance','Model & animation library','desktop-model-library','VRM VRMA import model animation clips'],['appearance','Interaction connections','appearance-avatar-hits','click hold release hover delayed expressions outline filters'],['appearance','Physics, calibration & effects','appearance-avatar-studio','spring bones T-pose lighting GLSL ragdoll pickup carry swing scruff throw fall land landing taskbar catch eye gaze saccade IPD face expression blink smile reaction'],['interface','Conversation shortcuts','settings-shortcuts','quick actions message shortcuts'],['voice','Live calibration & detector testing','settings-voice-live','microphone wake word VAD'],['initiative','Live initiative preferences & event rules','settings-initiative-live','proactive conversation'],['appearance','Live monitor & surface placement','settings-display-live','display monitor position'],['tools','Tool approvals & permissions','settings-tool-approvals','approval safety tasks']])items.push({id:'section:'+sectionId,label,group,kind:'section',source:'section',help:keywords,target:{group,sectionId}});
   return items;
 }
 export function searchSettings(items,query,groups=[]){

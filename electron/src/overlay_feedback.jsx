@@ -4,17 +4,19 @@ import useVoiceState from './use_voice_state.jsx';
 import useBorderEffects from './use_border_effects.jsx';
 import {initialReply,reduceOverlayReply} from './overlay_reply.mjs';
 import SpeechPopup,{usePopupVisibility} from './speech_popup.jsx';
+import {popupInteractive} from './interactive_bridge.mjs';
 export default function OverlayFeedback({preferences:p,geometry,update}){
  const voice=useVoiceState();
  const [chatVisible,setChatVisible]=useState(true),[output,setOutput]=useState(initialReply),[surface,setSurface]=useState(null);
  const effects=useBorderEffects(p,voice,output.generating);
-  useEffect(()=>{const hit=e=>window.popupBridge?.interactive(!!e.target.closest?.('.speech-popup.popup-visible')||!!document.querySelector('.speech-popup[data-dragging=true]'));document.addEventListener('pointermove',hit,true);document.addEventListener('mousemove',hit,true);return()=>{document.removeEventListener('pointermove',hit,true);document.removeEventListener('mousemove',hit,true);};},[]);
+  // Over a visible popup the overlay takes the pointer; reported to main only when that changes (interactive_bridge.mjs).
+  useEffect(()=>{const hit=e=>popupInteractive(!!e.target.closest?.('.speech-popup.popup-visible')||!!document.querySelector('.speech-popup[data-dragging=true]'));document.addEventListener('pointermove',hit,true);document.addEventListener('mousemove',hit,true);return()=>{document.removeEventListener('pointermove',hit,true);document.removeEventListener('mousemove',hit,true);};},[]);
  useEffect(()=>{
   let alive=true;
   window.controlVisibilityBridge?.get().then(v=>{if(alive)setChatVisible(v);}).catch(()=>{});
   const off=window.controlVisibilityBridge?.subscribe(setChatVisible),surfaceOff=window.chatSurfaceBridge?.subscribe(setSurface);
   const disconnect=connectEvents(event=>setOutput(old=>reduceOverlayReply(old,event)),connected=>{if(!connected)setOutput(old=>({...old,generating:false}));});
-  return()=>{alive=false;off?.();surfaceOff?.();disconnect();window.popupBridge?.interactive(false);};
+  return()=>{alive=false;off?.();surfaceOff?.();disconnect();popupInteractive(false);};
  },[]);
  const transcript=voice.transcript?.text||'';
  const transcriptVisible=usePopupVisibility(transcript,voice.enabled&&!voice.transcript?.final,p.transcriptSeconds);

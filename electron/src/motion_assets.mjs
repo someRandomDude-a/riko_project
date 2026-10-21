@@ -4,7 +4,7 @@ import {VRMUtils} from '@pixiv/three-vrm';
 import {VRMAnimationLoaderPlugin,createVRMAnimationClip} from '@pixiv/three-vrm-animation';
 import {API} from './api.mjs';
 
-/** Import adapters are isolated from policy and pose interpolation. */
+/** Import adapters are isolated from policy and pose interpolation. Pose bones are canonical VRM 1.0 rotations; .vrma samples are native (native:true). */
 export class MotionAssetSampler {
   constructor(vrm,{load}={}) {
     this.vrm=vrm;this.cache=new Map();this.closed=false;
@@ -58,7 +58,8 @@ export class MotionAssetSampler {
     if(!asset.loop&&seconds>=entry.duration&&!entry.completed?.has(actionID)){
       (entry.completed||=new Set()).add(actionID);report('completed');
     }
-    return {bones,expressions};
+    // Read back from the live nodes: native normalized axes (a VRM 0.x clip is already flipped by createVRMAnimationClip).
+    return {bones,expressions,native:true};
   }
   retain(ids){
     for(const [id,entry]of this.cache)if(!ids.has(id)){entry.mixer?.stopAllAction();entry.mixer?.uncacheRoot(this.vrm.scene);this.cache.delete(id);}

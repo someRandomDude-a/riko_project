@@ -9,3 +9,7 @@ export function validateAvatarFormat(metaVersion,format='auto'){
   if(!['auto','vrm0','vrm1'].includes(format)||format!=='auto'&&format!==detected)throw new Error('VRM format does not match the selected model');
   return detected;
 }
+
+// three.js culls a mesh whose bounds leave the view, but a skinned mesh's bounds are its rest pose: once the avatar is
+// swung, dragged or animated, parts would blink out for frames. Avatar meshes are always on screen, so they are never culled.
+export function keepAvatarDrawn(root){let count=0;root.traverse(object=>{if(object.isMesh){object.frustumCulled=false;count++;}});return count;}

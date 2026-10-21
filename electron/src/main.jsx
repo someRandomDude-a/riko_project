@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import StreamChat from './stream_chat.jsx';
 import SettingsPage from './settings_page.jsx';
@@ -23,8 +23,12 @@ import CompactScale from './compact_scale.jsx';
 import CornerResize from './corner_resize.jsx';
 import {NeuralData} from './neural_settings.jsx';
 import FirstSetup from './first_setup.jsx';
+import {changeReporter} from './interactive_bridge.mjs';
+import ErrorBoundary from './error_boundary.jsx';
 
-function App() {
+const selectName=state=>state.character_name;
+
+function Route() {
   if(location.hash==='#/setup')return <FirstSetup/>;
   if(location.hash==='#/neural-data')return <NeuralData/>;
   if (location.hash === '#/whiteboard') return <BoardWindow/>;
@@ -32,6 +36,8 @@ function App() {
   if (location.hash === '#/overlay') return <Overlay/>;
   return <Controls/>;
 }
+// A render error shows a Reload card instead of leaving a blank (or, for the overlay and dock, invisible) window.
+function App() {return <ErrorBoundary route={location.hash.slice(2)||'control'}><Route/></ErrorBoundary>;}
 
 function Controls() {
   const [view, setView] = useState('chat');
@@ -39,15 +45,20 @@ function Controls() {
   const [mode,setMode]=useState('full');
   const [dockSize,setDockSize]=useState(88);
   useEffect(()=>{document.documentElement.classList.toggle('transparent-chat',mode!=='full');return()=>document.documentElement.classList.remove('transparent-chat');},[mode]);
-  useEffect(()=>{if(mode==='full')return;const hit=event=>{const target=event.target.closest('.msg,.composer,.speech-popup,.glass-dock,.dash-bar,.scale-grip,.corner-resize,.notice,[role=alert]');window.compactBridge?.interactive(!!target&&Number(getComputedStyle(target).opacity)>.08||!!document.querySelector('[data-dragging=true]'));};document.addEventListener('pointermove',hit,true);return()=>{document.removeEventListener('pointermove',hit,true);};},[mode]);
+  // The dock and mini chat take the pointer only over their controls: reported to main when that changes (a mode switch resets it).
+  useEffect(()=>{if(mode==='full')return;const report=changeReporter(value=>window.compactBridge?.interactive(value));const hit=event=>{const target=event.target.closest('.msg,.composer,.speech-popup,.glass-dock,.dash-bar,.scale-grip,.corner-resize,.notice,[role=alert]');report(!!target&&Number(getComputedStyle(target).opacity)>.08||!!document.querySelector('[data-dragging=true]'));};document.addEventListener('pointermove',hit,true);return()=>{document.removeEventListener('pointermove',hit,true);};},[mode]);
   useEffect(()=>{let alive=true;window.windowBridge?.state().then(value=>{if(alive){setMode(value.mode||'full');if(value.dockWidth)setDockSize(value.dockWidth);}}).catch(()=>{});const off=window.windowBridge?.subscribe(value=>{if(value.mode)setMode(value.mode);if(value.dockWidth)setDockSize(value.dockWidth);});return()=>{alive=false;off?.();};},[]);
   const [preferences, updatePreferences] = usePreferences();
-  const runtime=useRuntime();
+  const character=useRuntime(selectName);
+  useEffect(()=>{window.riko?.settingsDirty?.(settingsDirty);},[settingsDirty]);
   function navigate(name){if(view==='settings'&&settingsDirty&&name!==view&&!confirm('Discard unsaved settings changes?'))return;setView(name);}
+  // StreamChat is memoized: its Settings button gets one callback for the window's life.
+  const navigateRef=useRef(navigate);navigateRef.current=navigate;
+  const openSettings=useCallback(()=>{window.windowBridge?.mode('full');navigateRef.current('settings');},[]);
   useEffect(()=>window.riko?.onNavigate?.(name=>{if(['chat','workspace','tasks','settings','appearance'].includes(name))navigate(name);}),[view,settingsDirty]);
-  useEffect(()=>{document.title=runtime.character_name||'Conversation';},[runtime.character_name]);
+  useEffect(()=>{document.title=character||'Conversation';},[character]);
    return <ExplanationContext.Provider value={preferences.advancedExplanations}><div className={'app-shell mode-'+mode+' density-'+preferences.density+' skin-'+preferences.skin+(preferences.reduceMotion?' reduce-motion':'')} style={{...appearanceStyle(preferences),'--collapsed-size':dockSize+'px'}}>
-     <WindowChrome title={runtime.character_name||''} blur={mode==='full'&&preferences.glassBlur>0}><div className="app-header">
+     <WindowChrome title={character||''} blur={mode==='full'&&preferences.glassBlur>0}><div className="app-header">
        <button className="compact-switch quiet-button" aria-label={mode==='compact'?'Expand to full interface':'Open compact chat'} title={mode==='compact'?'Full interface':'Compact chat'} onClick={()=>{if(mode==='full'&&settingsDirty&&!confirm('Discard unsaved settings changes?'))return;window.windowBridge?.mode(mode==='compact'?'full':'compact').then(()=>{if(mode==='full')setView('chat');}).catch(()=>{});}}>{mode==='compact'?<ArrowUpRight size={19}/>:'Compact chat'}</button>
       <nav aria-label="Main navigation">{[['chat','Conversation',MessageCircle],['workspace','Canvas',PanelsTopLeft],['tasks','Tasks',CheckCheck],['settings','Settings',Settings],['appearance','Appearance',Palette]].map(([name,label,Icon])=>
          <button key={name} className={view===name?'active':''} aria-label={label} title={label} aria-current={view===name?'page':undefined} onClick={()=>navigate(name)}><Icon size={17}/><span>{label}</span></button>)}
@@ -57,7 +68,7 @@ function Controls() {
      {mode!=='full'&&<CornerResize/>}
     <div className="app-body"><div className="primary-view">
     {/* Keep the event consumer mounted while browsing tools/settings: no lost turns. */}
-      <div className="chat-host" hidden={mode==='full'&&view !== 'chat'}><StreamChat compactMode={mode!=='full'} collapsedMode={mode==='collapsed'} onSettings={()=>{window.windowBridge?.mode('full');navigate('settings');}} preferences={preferences}/></div>
+      <div className="chat-host" hidden={mode==='full'&&view !== 'chat'}><StreamChat compactMode={mode!=='full'} collapsedMode={mode==='collapsed'} onSettings={openSettings} preferences={preferences}/></div>
       <div className="view-host" hidden={mode!=='full'||view === 'chat'}>
       {view === 'workspace' && <Workspace/>}
       {view === 'settings' && <SettingsPage preferences={preferences} updatePreferences={updatePreferences} onDirty={setSettingsDirty}/>}

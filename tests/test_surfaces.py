@@ -1,7 +1,7 @@
 import pytest
 from process.app_core.desktop.state import DesktopState
 from process.app_core.desktop.media import resolve_media
-from process.app_core.desktop.tools import WhiteboardTool, EffectTool
+from process.app_core.desktop.tools import DesktopServices, WhiteboardTool, EffectTool
 from process.app_core.tools.registry import local_definition
 
 
@@ -19,8 +19,8 @@ def test_render_acknowledgements_reject_stale_commands():
     assert not state.surface_result('effect', first, 'completed')
     assert state.surface_result('effect', second, 'playing')
     assert state.surface_result('effect', second, 'error', 'Codec unsupported')
-    assert state.active_effect is None
-    assert state.last_effect['error'] == 'Codec unsupported'
+    assert state.snapshot()['effect'] is None
+    assert state.snapshot()['last_effect']['error'] == 'Codec unsupported'
 
 
 def test_media_access_is_scoped_and_rejects_nonmedia(tmp_path):
@@ -35,10 +35,11 @@ def test_media_access_is_scoped_and_rejects_nonmedia(tmp_path):
 
 
 def test_whiteboard_tool_validates_and_returns_queued_id(tmp_path):
-    tool = WhiteboardTool(); tool.state = DesktopState()
+    state = DesktopState()
+    tool = WhiteboardTool(DesktopServices.of(state))
     result = tool.execute(action='draw', points=[[0, 0], {'x': 10, 'y': 20}])
     assert 'queued' in result
-    assert tool.state.whiteboard[0].payload['points'] == [[0, 0], [10, 20]]
+    assert state.snapshot()['whiteboard'][0]['payload']['points'] == [[0, 0], [10, 20]]
     with pytest.raises(ValueError): tool.execute(action='draw', points=[[float('nan'), 0]])
     with pytest.raises(ValueError): tool.execute(action='text', text='hi', color='not-a-color')
     schema = local_definition(tool)['inputSchema']
@@ -48,38 +49,39 @@ def test_whiteboard_tool_validates_and_returns_queued_id(tmp_path):
 
 @pytest.mark.parametrize('kwargs', [{'size': None}, {'size': True}, {'width': float('nan')}, {'text': 5}])
 def test_whiteboard_invalid_arguments_are_rejected_before_queueing(kwargs):
-    tool = WhiteboardTool(); tool.state = DesktopState()
+    state = DesktopState()
+    tool = WhiteboardTool(DesktopServices.of(state))
     with pytest.raises(ValueError): tool.execute(action='text', **{'text': 'hello', **kwargs})
-    assert tool.state.whiteboard == []
+    assert state.snapshot()['whiteboard'] == []
 
 
 def test_effect_tool_requires_an_approved_video(tmp_path):
     folder = tmp_path / 'effects' / 'greenscreens'; folder.mkdir(parents=True)
     (folder / 'sample.webm').write_bytes(b'video')
-    tool = EffectTool(); tool.state = DesktopState()
-    tool.state.media_resolver = lambda path: resolve_media(tmp_path, path)
-    tool.state.effects_directory = 'effects/greenscreens'
+    state = DesktopState()
+    tool = EffectTool(DesktopServices.of(state, media_resolver=lambda path: resolve_media(tmp_path, path), effects_directory='effects/greenscreens'))
     assert 'queued' in tool.execute(name='sample.webm')
-    assert tool.state.active_effect['duration'] == 8
+    assert state.snapshot()['effect']['duration'] == 8
     with pytest.raises(ValueError): tool.execute(name='missing.webm')
     with pytest.raises(ValueError): tool.execute(name='sample.webm', duration=float('nan'))
     tool.execute(action='stop')
-    assert tool.state.last_effect['status'] == 'cancelled'
+    assert state.snapshot()['last_effect']['status'] == 'cancelled'
 
 
 def test_board_auto_layout_measurements_and_pages():
     state = DesktopState()
     first = state.add_whiteboard('text', {'text': '# Heading', 'x': None, 'y': None, 'width': 420})
     second = state.add_whiteboard('text', {'text': 'Second', 'x': None, 'y': None, 'width': 420})
-    assert state.whiteboard[1].bounds['y'] > state.whiteboard[0].bounds['y']
+    board = lambda: state.snapshot()['whiteboard']
+    assert board()[1]['bounds']['y'] > board()[0]['bounds']['y']
     state.surface_result('whiteboard', first, 'rendered', bounds={'x': 999, 'y': 999, 'width': 436, 'height': 400})
-    assert state.whiteboard[0].bounds['x'] == 40 # local/user coordinates cannot alter model layout
-    assert state.whiteboard[1].bounds['y'] >= 464
+    assert board()[0]['bounds']['x'] == 40 # local/user coordinates cannot alter model layout
+    assert board()[1]['bounds']['y'] >= 464
     assert state.board_result(first, timeout=0)['bounds']['height'] == 400
     state.board_page('new_page')
     state.add_whiteboard('text', {'text': 'New page', 'x': None, 'y': None})
-    assert state.whiteboard[-1].page == 'page-2'
-    assert state.whiteboard[-1].bounds['y'] == 40
+    assert board()[-1]['page'] == 'page-2'
+    assert board()[-1]['bounds']['y'] == 40
     state.board_page('previous_page')
-    assert state.whiteboard_page == 'page-1'
+    assert state.snapshot()['whiteboard_page'] == 'page-1'
     assert state.board_result(second, timeout=0)['page'] == 'page-1'

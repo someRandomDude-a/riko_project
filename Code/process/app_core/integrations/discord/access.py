@@ -3,10 +3,10 @@ from dataclasses import replace
 import hashlib
 import json
 import os
-from pathlib import Path
 import threading
 
 from .config import BotSettings
+from ...persistence.atomic import atomic_write
 
 KEYS = {'admins', 'users', 'channels', 'allow_dms', 'admin_actions'}
 
@@ -33,9 +33,10 @@ def apply_access(settings, raw):
 
 
 class DiscordAccess:
-    def __init__(self, root):
-        self.root = Path(root)
-        self.path = self.root / 'persistent_memories' / 'discord_access.json'
+    def __init__(self, paths):
+        """paths: DataPaths (configuration/paths.py): discord_access.json, the .env holding the credentials, the data root."""
+        self.paths = paths
+        self.path = paths.discord_access
         self.lock = threading.RLock()
         self._credentials_key = None
         self._credentials = None
@@ -52,11 +53,12 @@ class DiscordAccess:
     def credentials(self):
         from dotenv import dotenv_values
         with self.lock:
-            path = self.root / '.env'
-            key = (self.signature(path), tuple(sorted((name,value) for name,value in os.environ.items() if name.startswith('Discord_'))))
+            path = self.paths.env_file
+            overrides = BotSettings.overrides(os.environ)  # matched without case: Windows reports DISCORD_BACKEND_URL
+            key = (self.signature(path), tuple(sorted(overrides.items())))
             if self._credentials is not None and key == self._credentials_key: return self._credentials
             env = {name: value for name, value in dotenv_values(path).items() if value is not None}
-            settings = BotSettings.from_env(self.root, {**env, **os.environ})
+            settings = BotSettings.from_env(self.paths.root, {**env, **overrides})
             self._credentials_key, self._credentials = key, settings
             return settings
 
@@ -84,9 +86,6 @@ class DiscordAccess:
             current = self.read()
             if current['revision'] != revision: raise RuntimeError('Discord settings changed elsewhere. Reload before saving.')
             values = validate_access(values)
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_suffix('.tmp')
-            temporary.write_text(json.dumps(values, indent=2), encoding='utf-8')
-            temporary.replace(self.path)
+            atomic_write(self.path, json.dumps(values, indent=2))
             self._access_key = None
             return self.read()

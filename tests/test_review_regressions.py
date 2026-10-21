@@ -12,7 +12,7 @@ from process.app_core.desktop.state import DesktopState
 from process.app_core.desktop.tools import iter_tools
 from process.app_core.events.stream import stream_events
 from process.app_core.events.bus import EventBus
-from process.app_core.conversation.messages import ChatMessage, ModelResponse
+from process.app_core.kernel.messages import ChatMessage, ModelResponse
 from process.app_core.tools.registry import RegisteredTool, ToolRegistry
 
 
@@ -114,9 +114,9 @@ def test_speech_expiry_notifies_without_another_state_mutation():
 def test_stale_speech_timer_cannot_clear_a_new_bubble():
     state = DesktopState()
     state.set_speech('old', seconds=10)
-    deadline = state.speech_until
+    deadline = state.presence._until
     state.set_speech('new', seconds=20)
-    state._expire_speech(deadline)
+    state.presence._expire(deadline)  # the old bubble's timer, already firing when the new bubble replaced it
     assert state.snapshot()['speech'] == 'new'
     state.set_speech('', seconds=0)
 
@@ -128,7 +128,7 @@ def test_snapshot_and_input_payloads_do_not_share_mutable_board_state():
     assert 'auto_place' not in payload
     snapshot = state.snapshot()
     snapshot['whiteboard'][0]['payload']['text'] = 'changed externally'
-    assert state.whiteboard[0].payload['text'] == 'original'
+    assert state.snapshot()['whiteboard'][0]['payload']['text'] == 'original'
 
 
 @pytest.mark.parametrize('bounds', [{}, {'x': 0}, {'x': 0, 'y': 0, 'width': float('nan'), 'height': 1}, {'x': 0, 'y': 0, 'width': 1, 'height': 0}])
@@ -136,7 +136,7 @@ def test_invalid_surface_bounds_raise_value_error(bounds):
     state = DesktopState()
     command = state.add_whiteboard('text', {'text': 'hi'})
     with pytest.raises(ValueError): state.surface_result('whiteboard', command, 'rendered', bounds=bounds)
-    assert state.whiteboard[0].status == 'queued'
+    assert state.snapshot()['whiteboard'][0]['status'] == 'queued'
 
 
 def test_stale_coordinates_do_not_trigger_repeated_ack_events():
@@ -153,7 +153,7 @@ def test_stale_coordinates_do_not_trigger_repeated_ack_events():
 @pytest.mark.parametrize('geometry', [{'screen': -1}, {'width': 1}, {'width': True}, {'x': 1.5}, {'unknown': 1}, {'screen': 2}])
 def test_surface_geometry_is_validated_for_every_caller(geometry):
     state = DesktopState()
-    state.displays = [{'index': 0}]
+    state.set_displays([{'index': 0, 'primary': True}])
     before = state.snapshot()['avatar_geometry']
     with pytest.raises(ValueError): state.update_geometry('avatar', **geometry)
     assert state.snapshot()['avatar_geometry'] == before

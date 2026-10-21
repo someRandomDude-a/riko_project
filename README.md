@@ -13,7 +13,10 @@ Install Python runtime dependencies in your virtual environment:
 .venv\Scripts\python.exe -m pip install --no-deps EfficientWord-Net
 ```
 
-`install_reqs.sh` provides the shell-based alternative. Python package metadata
+`install_reqs.sh` (macOS, Linux or Git Bash) installs the same into the active environment, or `PYTHON=...`,
+using uv when present. It picks the PyTorch wheels for the machine: PyPI (Metal/MPS) on macOS, CUDA 13 (driver 580+)
+or 12.6 when `nvidia-smi` sees a GPU, ROCm 7.2 when `rocminfo` exists on Linux, CPU otherwise; set
+`RIKO_TORCH_INDEX` (`default`, `cpu`, `cu126`, `cu130`, `rocm7.2`, ...) to choose. Python package metadata
 requires 3.11 or newer; model dependencies and CUDA wheels must support your chosen
 Python/GPU combination. The current local environment uses Python 3.14. Installing
 the requirements alone does not guarantee GPU support. Faster-Whisper GPU use
@@ -26,6 +29,12 @@ Review `character_config.yaml` before starting:
   `riko-native` library. Set `runtime.native_library` to a compatible build and
   select a local GGUF or exact Hugging Face file/revision. No HTTP listener,
   llama-server process or llama-cpp-python binding is used. See [model runtime](docs/llama-runtime.md).
+- `runtime.provider: llama_server` connects to a llama-server you run yourself, built
+  for any llama.cpp backend (CUDA, ROCm/HIP, Metal, Vulkan or CPU), on this machine or
+  another. Set `runtime.base_url` (default `http://127.0.0.1:8080`) and start it with
+  `--parallel` equal to `runtime.parallel_slots` and enough `--ctx-size` for every slot;
+  Riko prints the exact command if they do not match. Riko keeps its reserved live slot,
+  exact token counts, streaming and cancellation. The emotion probe needs `llama_cpp`.
 - Remote OpenAI-compatible providers, including LM Studio, are optional alternatives.
 - Start GPT-SoVITS separately. `sovits_ping_config` configures its HTTP endpoint,
   reference audio/transcript and PCM sample rate. Python does not load its model.
@@ -47,9 +56,10 @@ npm run build
 npm run start
 ```
 
-Electron does not start or stop Python. Quit Python with Ctrl+C; the default
-Electron quit shortcut is Ctrl+Shift+Q. Default controls/whiteboard shortcuts are
-Ctrl+Shift+Space and Ctrl+Shift+W; supported overrides are in desktop settings.
+Electron does not start or stop Python. Quit Python with Ctrl+C. The only default global shortcut is
+Ctrl+Shift+Space (Cmd+Shift+Space on macOS), which opens the controls; Quit, Settings and the whiteboard are in
+the tray menu. `desktop.shortcuts` binds `popup`, `settings`, `whiteboard`, `quit`, `mic`, `audio` or `sleep` to an
+Electron accelerator, and `null` or `''` unbinds one. Electron reads it at launch.
 
 For frontend development, run `npm run dev` in `electron/`, then launch Electron
 from a separate terminal with `$env:RIKO_DEV="1"` and `npm run start`.
@@ -92,13 +102,20 @@ so you can start the external server and continue without restarting the app.
 Follow-up defaults to 10 seconds after playback. Sustained user speech interrupts
 after 1.5 seconds by default; brief interjections preserve context without stopping
 capture. Stop overrides speaking priority. Audible text position is estimated,
-not word-aligned. Use headphones: speaker echo rejection is not implemented, and
-closing an HTTP stream cannot guarantee server-side synthesis cancellation.
+not word-aligned. Speaker echo is not cancelled: through speakers Riko hears herself,
+so by default her echo can interrupt her and be saved as your words. With speakers,
+set `voice.barge_in: echo_gate` (while she plays, only speech clearly louder than
+her echo counts, about 4-6 times; each reply learns her echo's level in its first
+seconds, ignoring the microphone meanwhile) or
+`stop_only` (the microphone ignores everything while she plays; press Stop), or use
+headphones. Closing an HTTP stream cannot guarantee server-side synthesis cancellation.
 
 Configure `avatar.model` for your compatible VRM. The default path is
 `electron/public/models/riko.vrm`; models are local assets, not bundled in Git.
-Julia uses normal Hugging Face caching, not a checked-in model directory. VTube
-Studio, NDI and face tracking are not used.
+Julia uses normal Hugging Face caching, not a checked-in model directory. Julia-1 is
+downloaded at a pinned commit (`emotion.revision`, `memory.system1_revision`) and the
+Python code it ships is checked file by file before it runs. VTube Studio, NDI and
+face tracking are not used.
 
 Video effects live in `effects/greenscreens/` (`.mp4`, `.webm`, `.mov`, `.m4v`);
 playback depends on Electron codec support. Media tools are limited to approved
@@ -138,7 +155,23 @@ Replace the paths; use your configured store if different. Do not add this serve
 to the companion's own `mcp.json`: its task tools are already registered. External
 clients can share the SQLite database. `tests/test_tasks.py` covers the stdio entry
 point with a real subprocess round trip. For other tool servers, copy
-`mcp.json.example` to `mcp.json` and edit it.
+`mcp.json.example` to `mcp.json`, edit it, and point `tools.mcp_config` at it.
+
+MCP servers are third-party code, so Riko treats them that way:
+
+- **Approval.** Each tool from an MCP server asks before every call until you
+  allow it in Settings -> Tools (Electron asks you to confirm), or set
+  `"require_approval": false` for that server in `mcp.json`.
+- **Environment.** A stdio server starts with a minimal environment (PATH, HOME or
+  the Windows system folders, locale and temp settings, and `RIKO_DATA_DIR` /
+  `RIKO_CONFIG`), never the backend's API keys or the Discord token. Put the
+  values a server needs in its `env`, or list the names it may inherit in
+  `inherit_env` (for example `["HTTPS_PROXY"]`). The backend log notes how many
+  variables each server started without.
+- **Untrusted text.** The model sees a server's tool descriptions, results and
+  errors framed as untrusted data, never as instructions, with the text in its
+  parameter definitions shortened; the Activity panel shows the raw result. A tool
+  whose definition is still over 32 KiB is not loaded.
 
 ## Optional Discord entry point
 
@@ -210,6 +243,13 @@ From `electron/`: `npm test`, `npm run build`, `node --check main.cjs` and
 `node --check preload.cjs`. Automated tests do not establish real microphone,
 GPU throughput or desktop-device behavior; consult the live-check guides.
 
+`.github/workflows/ci.yml` runs all of the above on every push and pull request,
+the Python suite on Windows, Linux and macOS. Those tests mock every GPU, audio and
+native path. `tests/test_native_smoke.py` loads a real riko-native build and GGUF
+when `RIKO_TEST_NATIVE_LIBRARY` and `RIKO_TEST_GGUF` name them
+(`python -m pytest -m native`); `.github/workflows/native-smoke.yml` builds the
+Metal bundle and runs it on Apple silicon weekly and when the bridge changes.
+
 Generated dependencies/builds/models are ignored. `persistent_memories/` contains
 user data and must not be deleted during cleanup. Existing staged artifact removals
 do not erase blobs from historical commits; see the repository review.
@@ -221,8 +261,8 @@ do not erase blobs from historical commits; see the repository review.
 - ASR: [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper).
 # Performance diagnostics
 
-Settings -> Performance & logs includes logging level (DEBUG, INFO, WARNING, ERROR), file logging, inference timings, rotation size and backup count. Restart Python after saving these settings. The rotating file is `logs/debug.log`; review it before sharing. Timing instrumentation does not record conversation text. DEBUG records inference slot wait/context packing and Julia interpretation duration; INFO records generation duration and throughput.
+Settings -> Performance & logs includes logging level (DEBUG, INFO, WARNING, ERROR), file logging, inference timings, rotation size and backup count. Restart Python after saving these settings. The rotating file is `logs/debug.log`; review it before sharing. Secrets (API keys, tokens, this start's API token) are redacted there and in the console. The packaged app also writes the backend's console output to `logs/backend-launch.log` (whatever file logging says, since it is what a startup crash leaves): capped at 5 MiB with two older copies, its secrets redacted. Timing instrumentation does not record conversation text. DEBUG records inference slot wait/context packing and Julia interpretation duration; INFO records generation duration and throughput.
 
 Chat displays live llama.cpp per-request token counts and tokens/second from `timings_per_token`. Other providers use explicitly labelled estimates until final usage arrives. Counts include reasoning tokens. Julia remains live for cumulative partial user transcriptions. Settings -> Custom neural network settings manages the agent-expression probe and training data.
 
-`runtime.native_library` is required for native llama.cpp inference. There is no external-server fallback; unset paths produce an actionable startup error. Choose a GPU-enabled build for GPU inference: requesting GPU layers alone does not prove backend support. Remote OpenAI-compatible providers remain available.
+`runtime.native_library` is required for native llama.cpp inference (`llama_cpp`); unset paths produce an actionable startup error. To use a llama.cpp build Riko does not bundle, run llama-server and choose `llama_server` instead. Choose a GPU-enabled build for GPU inference: requesting GPU layers alone does not prove backend support. Remote OpenAI-compatible providers remain available.

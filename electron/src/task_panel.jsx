@@ -2,8 +2,7 @@ import React, {useEffect, useState} from 'react';
 import FormattedText from './formatted_text.jsx';
 import useResource from './use_resource.jsx';
 import Explanation from './explanation.jsx';
-
-const API = 'http://127.0.0.1:8765';
+import {request} from './api.mjs';
 
 export default function TaskPanel() {
   const [tasks, setTasks] = useState([]);
@@ -15,12 +14,6 @@ export default function TaskPanel() {
   const [reason, setReason] = useState('User correction');
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
-  async function request(path, options) {
-    const response = await fetch(API + path, options);
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.detail || 'Request failed');
-    return body;
-  }
   async function load() {
     try {setTasks((await request('/api/tasks?query=' + encodeURIComponent(query))).tasks); setError('');}
     catch (exc) {setError(exc.message);}
@@ -35,7 +28,7 @@ export default function TaskPanel() {
   async function create() {
     setPending(true);
     try {
-      await request('/api/tasks', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({title})});
+      await request('/api/tasks', {method: 'POST', body: {title}});
       setTitle(''); await load();
     } catch (exc) {setError(exc.message);} finally {setPending(false);}
   }
@@ -43,7 +36,7 @@ export default function TaskPanel() {
     setPending(true);
     try {
       const changes = Object.fromEntries(['title', 'description', 'status', 'progress', 'next_step', 'blocker'].map(key => [key, selected[key]]));
-      await request('/api/tasks/' + selected.id, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({expected_revision: selected.revision, changes, reason})});
+      await request('/api/tasks/' + selected.id, {method: 'PATCH', body: {expected_revision: selected.revision, changes, reason}});
       await inspect(selected); await load();
     } catch (exc) {setError(exc.message);} finally {setPending(false);}
   }

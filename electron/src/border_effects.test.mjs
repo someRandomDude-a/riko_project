@@ -25,3 +25,13 @@ test('border preferences reject invalid values and preserve independent widths',
  const p=normalizeBorders({micBorderWidth:99,dockBorderWidth:2,screenBorderSpeed:NaN,screenBorderTrigger:'invalid',micBorderColor:'bad'});
  assert.equal(p.micBorderWidth,12);assert.equal(p.dockBorderWidth,2);assert.equal(p.screenBorderSpeed,4);assert.equal(p.screenBorderTrigger,'wake');assert.equal(p.micBorderColor,borderDefaults.micBorderColor);
 });
+test('a border moves only while something happens; on only because the microphone is on and waiting, it stands still',()=>{
+ const still=(...args)=>/effect-still/.test(borderEffect(...args).className);
+ assert.equal(still('mic',borderDefaults,{...voice,level:0}),true,'waiting for the wake word');
+ for(const phase of ['awake','capturing','transcribing','follow_up'])assert.equal(still('mic',borderDefaults,{...voice,phase,level:0}),false,phase);
+ assert.equal(still('mic',borderDefaults,{...voice,level:0,wake:{active:true}}),false,'awake');
+ assert.equal(still('mic',borderDefaults,{...voice,level:0},{generating:true}),false,'a reply generating');
+ assert.equal(still('screen',borderDefaults,{...voice,level:0},{wake:true}),false,'the wake flash');
+ assert.equal(still('mic',{...borderDefaults,micBorderActivity:true},{...voice,level:.5}),false,'sound, with Activity');
+ assert.equal(still('mic',{...borderDefaults,micBorderActivity:true},{...voice,level:0}),true,'silence, with Activity');
+});

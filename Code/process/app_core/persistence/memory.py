@@ -6,14 +6,54 @@ import math
 import threading
 import time
 import uuid
-import os
 import re
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime, timezone
+
+from ..kernel.cancellation import BackgroundPreempted
+from ..kernel.model_pins import JULIA_REVISION
+from .atomic import atomic_write
+from .preserve import preserve_unreadable
 
 logger = logging.getLogger(__name__)
 MEMORY_TYPES = ("episodic", "factual", "semantic", "preference", "relationship", "procedural")
+# The store is a list of memories (version 1), or {"version": N, "records": [...]}. Every build before this one reads only
+# the list, so version 1 is written in the layout it was read in, and the wrapper is written only once a store has
+# been wrapped or a version bump needs it. Bump the version only for a change older builds cannot read safely (they
+# refuse a newer store, untouched), with the step that upgrades the one before it. Added fields need no bump: unknown
+# keys are kept and written back unchanged, so a downgrade keeps them.
+STORE_VERSION = 1
+STORE_MIGRATIONS = {}  # {version: function(records at that version) -> records at version + 1}
+# Per captured memory: the recent dialogue it formed in, and a cap on every string and list in that context.
+FORMATION_HISTORY_MESSAGES, FORMATION_TEXT_CHARS, FORMATION_LIST_ITEMS = 12, 1000, 20
+
+
+def bound_formation_context(context):
+    """A fixed-size copy of a formation context: the newest history messages only, long strings and lists clipped.
+
+    Every capture rewrites the whole store before inference, so a context that held the whole chat
+    history (or a 10,000-point whiteboard stroke) made the file and each turn's stall grow without bound.
+    """
+    def clip(value):
+        if isinstance(value, str): return value if len(value) <= FORMATION_TEXT_CHARS else value[:FORMATION_TEXT_CHARS] + ' [truncated]'
+        if isinstance(value, dict): return {key: clip(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [clip(item) for item in value[:FORMATION_LIST_ITEMS]] + ([f'[{len(value) - FORMATION_LIST_ITEMS} more]'] if len(value) > FORMATION_LIST_ITEMS else [])
+        return value
+    context = dict(context or {})
+    history = context.get('history')
+    if isinstance(history, list) and len(history) > FORMATION_HISTORY_MESSAGES:
+        context.update(history=history[-FORMATION_HISTORY_MESSAGES:], history_truncated=True)
+    return clip(context)
+
+
+def top_inner_products(matrix, vector, k):
+    """Rows with the highest inner product, best first; exact ties keep the lower row. Unit rows make it cosine."""
+    import numpy as np
+    scores = matrix @ vector
+    order = np.argsort(-scores, kind='stable')[:max(0, k)]
+    return scores[order], order
 
 
 @dataclass
@@ -41,10 +81,69 @@ class MemoryRecord:
     reflection_kind: str = ""
 
 
+def _unit(value):
+    number = float(value) if isinstance(value, str) else value
+    if type(number) not in (int, float) or not math.isfinite(number): raise ValueError('a number from 0 to 1')
+    return min(1.0, max(0.0, float(number)))
+
+
+def _whole(minimum):
+    def check(value):
+        if type(value) is not int or value < minimum: raise ValueError(f'a whole number of at least {minimum}')
+        return value
+    return check
+
+
+def _flag(value):
+    if type(value) is bool: return value
+    if isinstance(value, str) and value.strip().casefold() in {'true', 'false'}: return value.strip().casefold() == 'true'
+    if type(value) is int and value in (0, 1): return bool(value)
+    raise ValueError('true or false')
+
+
+def _kind(expected, label):
+    def check(value):
+        if not isinstance(value, expected): raise ValueError(label)
+        return value
+    return check
+
+
+def _choice(*options):
+    def check(value):
+        if not isinstance(value, str) or value not in options: raise ValueError(' or '.join(options))
+        return value
+    return check
+
+
+def _strings(value):
+    if isinstance(value, str): value = [value]
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value): raise ValueError('a list of strings')
+    return value
+
+
+def _revisions(value):
+    if not isinstance(value, dict) or not all(type(item) is int for item in value.values()): raise ValueError('an object of revision numbers')
+    return value
+
+
+# Every MemoryRecord field but text and id (whose damage is structural): a stored value either passes, is read
+# losslessly ('0.8' as 0.8, 1.5 clamped to 1), or the field takes its default; the loader logs each change.
+FIELD_CHECKS = {'memory_type': _kind(str, 'text'), 'importance': _unit, 'confidence': _unit, 'tags': _strings,
+    'source': _kind(str, 'text'), 'created_at': _kind(str, 'a date/time string'), 'last_accessed': _kind(str, 'a date/time string'),
+    'access_count': _whole(0), 'revision': _whole(1), 'active': _flag,
+    'classification_status': _choice('pending', 'complete', 'error'), 'reflection_status': _choice('pending', 'complete', 'skipped', 'error'),
+    'processing_error': _kind(str, 'text'), 'derived': _flag, 'source_ids': _strings, 'source_revisions': _revisions,
+    'user_fields': _strings, 'formation_context': _kind(dict, 'an object'), 'reflection_kind': _kind(str, 'text')}
+RECORD_FIELDS = frozenset(item.name for item in fields(MemoryRecord))
+
+
 class JuliaMemoryDecider:
-    """CPU Julia 1 classifier for memory retention and categorization."""
-    def __init__(self, model_id, cache_dir=None, max_length=8192):
-        self.model_id, self.cache_dir, self.max_length = model_id, cache_dir, max_length
+    """Julia 1 classifier for memory retention and categorization (CPU unless memory.device picks CUDA), downloaded at the
+    pinned commit revision and checked like the emotion engine's (emotion/teacher.py). options: Julia's load options;
+    the factory passes the emotion engine's when they encode memory's questions identically, so both share one model."""
+    def __init__(self, model_id, cache_dir=None, max_length=8192, device='cpu', revision=JULIA_REVISION, options=None):
+        self.model_id, self.cache_dir, self.max_length, self.device, self.revision = model_id, cache_dir, max_length, device, revision
+        self.options = dict(options) if options else dict(strict_encoding=True, max_length=max_length, head_length=512)
         self.model = None
         self.attempted = False
 
@@ -52,13 +151,9 @@ class JuliaMemoryDecider:
         if self.model is not None or self.attempted: return self.model
         self.attempted = True
         try:
-            from huggingface_hub import snapshot_download
-            import importlib, sys
-            path = snapshot_download(self.model_id, cache_dir=str(self.cache_dir) if self.cache_dir else None)
-            if path not in sys.path: sys.path.insert(0, path)
-            self.model = importlib.import_module("julia").load_model(path, device="cpu", strict_encoding=True, max_length=self.max_length, head_length=512)
-            from ..emotion.compat import compatible_engine
-            compatible_engine(self.model)
+            from ..emotion import teacher
+            path = teacher.snapshot(self.model_id, self.revision, self.cache_dir)
+            self.model, _ = teacher.shared_model(path, self.device, manifest=teacher.verify(path, self.model_id, self.revision), **self.options)
         except Exception as exc:
             logger.warning("Memory System 1 unavailable: %s", exc)
         return self.model
@@ -89,8 +184,8 @@ class JuliaMemoryDecider:
             return {"memory_type": "episodic", "importance": .5, "confidence": .2, "retain": True, "tags": []}
 
 
-class ReflectionDeferred(Exception):
-    pass
+class ReflectionDeferred(BackgroundPreempted):
+    """A live turn or shutdown interrupted reflection; the record stays pending and is retried."""
 
 
 class MemoryStore:
@@ -100,9 +195,11 @@ class MemoryStore:
     All model/embedding work happens outside the record lock. Queries always see
     current originals; indexes are optional immutable snapshots, never authority.
     """
-    def __init__(self, config, *, reflection_provider=None, start_worker=True):
+    def __init__(self, config, *, reflection_provider=None, parallelism=1, token_counter=None, start_worker=True, julia_options=None):
+        # parallelism: reflections at once (the provider's background slots); token_counter: the provider's, else UTF-8 bytes;
+        # julia_options: System 1's Julia load options when it can share the emotion engine's model (factory.py)
         self.config, self.reflection_provider = config, reflection_provider
-        self.token_counter = lambda text: len(text.encode('utf-8'))
+        self.token_counter = token_counter or (lambda text: len(text.encode('utf-8')))
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.embed_lock = threading.Lock()
@@ -115,7 +212,10 @@ class MemoryStore:
         self.index_snapshot = None
         self.index_dirty = bool(self.records)
         self.embeddings_failed = False
-        self.decider = JuliaMemoryDecider(config.system1_model_id, config.system1_cache_dir, config.system1_max_length) if config.system1_enabled else None
+        from ..kernel.torch_device import validate
+        validate(config.device)
+        self.decider = JuliaMemoryDecider(config.system1_model_id, config.system1_cache_dir, config.system1_max_length, config.device,
+            config.system1_revision, julia_options) if config.system1_enabled else None
         if not self.records and config.default_memories:
             self.records = [MemoryRecord(text=item["text"], memory_type=item.get("memory_type", "factual"), importance=float(item.get("importance_score", item.get("importance", .5))), confidence=float(item.get("confidence", .9)), tags=list(item.get("tags", [])), source="configuration") for item in config.default_memories if item.get("text")]
             self._save()
@@ -123,7 +223,7 @@ class MemoryStore:
         self.worker = None
         self.workers = []
         self.in_flight = set()
-        self.parallelism = getattr(getattr(reflection_provider, 'owner', None), 'reflection_parallelism', 1)
+        self.parallelism = parallelism
         if start_worker:
             self.start()
 
@@ -136,26 +236,60 @@ class MemoryStore:
         self.worker = self.workers[0]
 
     def _load_records(self):
-        if not self.config.store_file.exists(): return []
+        """Read the store, failing closed (raising, never writing) only when its structure cannot be trusted.
+
+        A field with a wrong value is read losslessly where possible or reset to its default, with a warning, and the
+        file as it was is kept aside before the first save. Keys this build does not know are kept per record (and
+        at the top level) and written back unchanged.
+        """
+        self.extra_fields, self.extra_store_fields, self.repaired_store, self.wrapped_store = {}, {}, False, False
+        path = self.config.store_file
+        if not path.exists(): return []
         try:
-            raw = json.loads(self.config.store_file.read_text(encoding="utf-8"))
-            if not isinstance(raw, list): raise ValueError("Expected memory list")
-            records = [MemoryRecord(**item) for item in raw]
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, list): version, items = 1, raw  # the original, unversioned layout
+            elif isinstance(raw, dict) and isinstance(raw.get('records'), list) and type(raw.get('version')) is int and raw['version'] >= 1:
+                version, items, self.wrapped_store = raw['version'], raw['records'], True
+                self.extra_store_fields = {key: value for key, value in raw.items() if key not in {'version', 'records'}}
+            else: raise ValueError('Expected {"version": N, "records": [...]} or a list of memories')
+            if version > STORE_VERSION: raise ValueError(f'It was written by a newer Riko (store version {version}; this one reads up to {STORE_VERSION})')
+            for step in range(version, STORE_VERSION): items = STORE_MIGRATIONS[step](items)
+            records, repairs = [], []
+            for number, item in enumerate(items, 1):
+                if not isinstance(item, dict) or not isinstance(item.get('text'), str): raise ValueError(f'Memory {number} is not an object with text')
+                if 'id' in item and (not isinstance(item['id'], str) or not item['id']): raise ValueError(f'Memory {number} has an invalid id')
+                values, changed = {key: item[key] for key in ('text', 'id') if key in item}, []
+                for name, check in FIELD_CHECKS.items():
+                    if name not in item: continue
+                    try:
+                        values[name] = check(item[name])
+                        if values[name] != item[name]: changed.append((name, 'read as'))
+                    except (TypeError, ValueError, OverflowError) as exc: changed.append((name, f'is not {exc}; reset to'))
+                record = MemoryRecord(**values)
+                repairs += [f'memory {record.id}: {name} {item[name]!r:.80} {how} {getattr(record, name)!r:.80}' for name, how in changed]
+                if extra := {key: value for key, value in item.items() if key not in RECORD_FIELDS}: self.extra_fields[record.id] = extra
+                records.append(record)
             if len({record.id for record in records}) != len(records): raise ValueError("Duplicate memory IDs")
-            return records
         except Exception as exc:
             # Never replace a corrupt/incompatible store with defaults or an empty file.
-            raise RuntimeError(f"Unable to read memory store {self.config.store_file}: {exc}") from exc
+            raise RuntimeError(f"Unable to read memory store {path}: {exc}") from exc
+        for repair in repairs: logger.warning('Memory store %s: %s', path.name, repair)
+        self.repaired_store = bool(repairs) or version < STORE_VERSION  # a migrated store is also kept once as it was
+        if repairs:
+            self.pipeline_error = f'{len(repairs)} invalid memory field(s) were reset (see the log); the next save keeps the file as it was as {path.name}.unreadable-<time>'
+        return records
 
     def _save(self):
         with self.lock:
-            self.config.store_file.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.config.store_file.with_suffix(self.config.store_file.suffix + '.tmp')
-            with temporary.open('w', encoding='utf-8') as stream:
-                json.dump([asdict(record) for record in self.records], stream, indent=2, ensure_ascii=False)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.config.store_file)
+            if self.repaired_store:
+                # Keep the file as it was before repaired or migrated values replace it, by copy only: on a full disk a
+                # move would leave no store at all once the write fails. Raises OSError if it cannot be kept.
+                backup = preserve_unreadable(self.config.store_file, move=False)
+                if backup: logger.warning('Kept the memory store as it was before repairs or migration as %s', backup.name)
+            records = [{**asdict(record), **self.extra_fields.get(record.id, {})} for record in self.records]
+            store = {'version': STORE_VERSION, 'records': records, **self.extra_store_fields} if self.wrapped_store or STORE_VERSION > 1 else records
+            atomic_write(self.config.store_file, json.dumps(store, indent=2, ensure_ascii=False))
+            self.repaired_store = False
 
     def _find(self, record_id):
         return next((record for record in self.records if record.id == record_id), None)
@@ -184,12 +318,13 @@ class MemoryStore:
     def remember(self, text: str, *, source="conversation", context=None):
         text = text.strip()
         if not text: return None
+        context = bound_formation_context(context)  # a private copy, built outside the lock
         with self.condition:
             if self.closed: raise RuntimeError('Memory store is closed')
             normalized = ' '.join(text.casefold().split())
-            existing = next((r for r in self.records if not r.derived and r.source == source and r.formation_context == (context or {}) and ' '.join(r.text.casefold().split()) == normalized), None)
+            existing = next((r for r in self.records if not r.derived and r.source == source and r.formation_context == context and ' '.join(r.text.casefold().split()) == normalized), None)
             if existing: return deepcopy(existing)
-            record = MemoryRecord(text=text, source=source, classification_status='pending', reflection_status='pending', formation_context=deepcopy(context or {}))
+            record = MemoryRecord(text=text, source=source, classification_status='pending', reflection_status='pending', formation_context=context)
             self.records.append(record)
             self._save()  # Originals are durable and queryable BEFORE any model work.
             self.index_dirty = True
@@ -240,6 +375,7 @@ class MemoryStore:
                 if more <= removed: break
                 removed |= more
             self.records = [r for r in self.records if r.id not in removed]
+            for record_id in removed: self.extra_fields.pop(record_id, None)
             self._save()
             self.index_dirty = True
             self.condition.notify_all()
@@ -302,7 +438,6 @@ class MemoryStore:
         self._event('classified', record=result)
 
     def _reflect(self, snapshot):
-        from ..inference.llama_context import BackgroundPreempted
         permitted = self.config.reflection_enabled and self.reflection_provider and snapshot.active and not snapshot.derived and snapshot.importance >= self.config.reflection_min_importance
         if not permitted:
             with self.lock:
@@ -311,7 +446,7 @@ class MemoryStore:
                     current.reflection_status = 'skipped'
                     self._save()
             return
-        from ..conversation.messages import ChatMessage
+        from ..kernel.messages import ChatMessage
         # Do not feed a source its own prior descendants as independent evidence.
         with self.lock:
             excluded = {snapshot.id}
@@ -336,7 +471,7 @@ class MemoryStore:
                     '"source_ids": ["evidence IDs"], "confidence": 0.0}]}. Every item must cite the focal memory and all evidence it relies on. '
                     'Return at most four concise items; return an empty list if nothing useful can be derived.'),
                      ChatMessage('user', json.dumps({'focal_id': snapshot.id, 'evidence': evidence}, ensure_ascii=False), context_kind='reflection')]
-            from ..inference.background_budget import check_budget
+            from ..kernel.background_budget import check_budget
             context = self.config.reflection_context_window_tokens
             output = self.config.reflection_max_output_tokens
             check_budget(self.reflection_provider, messages, None, context, output)
@@ -372,7 +507,7 @@ class MemoryStore:
                     importance=snapshot.importance, confidence=min(confidence, *(evidence_by_id[i]['confidence'] for i in ids)),
                     tags=list(snapshot.tags), source='reflection', derived=True, reflection_kind=item['kind'],
                     source_ids=ids, source_revisions={i: evidence_by_id[i]['revision'] for i in ids}))
-        except (ReflectionDeferred, BackgroundPreempted):
+        except BackgroundPreempted:  # ReflectionDeferred, or any provider's preemption
             return  # Durable pending status allows a retry after the live turn.
         with self.condition:
             current = self._find(snapshot.id)
@@ -389,38 +524,39 @@ class MemoryStore:
         self._event('reflected', source_id=snapshot.id, records=[asdict(r) for r in derived_records])
 
     def _embed(self, texts):
+        import numpy as np
         if self.embedder is None:
             from sentence_transformers import SentenceTransformer
-            self.embedder = SentenceTransformer(self.config.embedding_model, device='cpu')
+            from ..kernel.torch_device import resolve
+            device = resolve(self.config.device)
+            try: self.embedder = SentenceTransformer(self.config.embedding_model, device=device)
+            except Exception as exc:
+                if device == 'cpu': raise
+                logger.warning('Embedding model could not load on %s; retrying on CPU: %s', device, exc)
+                self.embedder = SentenceTransformer(self.config.embedding_model, device='cpu')
         vectors = self.embedder.encode(texts, convert_to_numpy=True).astype('float32')
-        import faiss
-        faiss.normalize_L2(vectors)
-        return vectors
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)  # unit rows; an all-zero row stays zero
+        return np.divide(vectors, norms, out=vectors, where=norms > 0)
 
     def _rebuild_index(self):
-        with self.lock:
-            records = deepcopy([r for r in self.records if r.active])
-        if not records:
+        with self.lock:  # only what the index needs: never copy every formation context under the lock
+            mapping = [(r.id, r.revision, r.text) for r in self.records if r.active]
+        if not mapping:
             with self.lock:
                 self.index_snapshot = None
                 self.index_dirty = False
             return
         try:
-            import faiss
-            with self.embed_lock: vectors = self._embed([r.text for r in records])
-            index = faiss.IndexFlatIP(vectors.shape[1])
-            index.add(vectors)
-            mapping = [(r.id, r.revision, r.text) for r in records]
+            # A plain float32 matrix, rebuilt from record text on every start and never written to disk.
+            # Not FAISS: on macOS its bundled libomp crashes the process once torch's libomp is also running.
+            with self.embed_lock: vectors = self._embed([text for _, _, text in mapping])
+            vectors.setflags(write=False)
             with self.lock:
                 # Publish only if the source snapshot is still current. Query fallbacks
                 # cover records added or corrected while vectors were being computed.
                 if self.closed: return
                 if mapping != [(r.id, r.revision, r.text) for r in self.records if r.active]: return
-                self.config.index_file.parent.mkdir(parents=True, exist_ok=True)
-                temporary = str(self.config.index_file) + '.tmp'
-                faiss.write_index(index, temporary)
-                os.replace(temporary, self.config.index_file)
-                self.index_snapshot = (index, mapping)
+                self.index_snapshot = (vectors, mapping)
                 self.index_dirty = False
         except Exception as exc:
             with self.lock:
@@ -431,7 +567,9 @@ class MemoryStore:
 
     def retrieve(self, query: str, *, exclude_ids=None, return_records=False):
         with self.lock:
-            records = deepcopy([r for r in self.records if r.active and r.id not in (exclude_ids or set())])
+            # Ranking reads text and metadata only. Copying every formation context made each query cost the whole store,
+            # and reflection's related evidence carries none: it reflects on the focal memory's own context.
+            records = [deepcopy(replace(r, formation_context={})) for r in self.records if r.active and r.id not in (exclude_ids or set())]
             snapshot = self.index_snapshot
         if not records: return [] if return_records else ''
         semantic = {}
@@ -440,11 +578,10 @@ class MemoryStore:
         if snapshot and self.embedder is not None and self.embed_lock.acquire(blocking=False):
             try:
                 vector = self._embed([query])
-                scores, positions = snapshot[0].search(vector, min(len(snapshot[1]), self.config.max_results * 3))
-                for score, position in zip(scores[0], positions[0]):
-                    if position >= 0:
-                        record_id, revision, _ = snapshot[1][position]
-                        semantic[(record_id, revision)] = float(score)
+                scores, positions = top_inner_products(snapshot[0], vector[0], min(len(snapshot[1]), self.config.max_results * 3))
+                for score, position in zip(scores, positions):
+                    record_id, revision, _ = snapshot[1][position]
+                    semantic[(record_id, revision)] = float(score)
             except Exception as exc: logger.warning('Semantic query failed; using lexical recall: %s', exc)
             finally: self.embed_lock.release()
         words = set(re.findall(r'\w+', query.casefold()))
@@ -452,8 +589,9 @@ class MemoryStore:
             terms = set(re.findall(r'\w+', (record.text + ' ' + ' '.join(record.tags)).casefold()))
             overlap = len(words & terms) / max(1, len(words))
             similarity = max(0, semantic.get((record.id, record.revision), 0))
+            # A bad or pre-1970 date (OSError on Windows) costs only the recency bonus, never the turn.
             try: age = max(0, time.time() - datetime.fromisoformat(record.created_at).timestamp())
-            except ValueError: age = 0
+            except (TypeError, ValueError, OverflowError, OSError): age = 0
             return overlap * .55 + similarity * .3 + record.importance * .1 + .05 / (1 + age / 86400)
         selected, tokens = [], 0
         for record in sorted(records, key=rank, reverse=True):
@@ -481,10 +619,11 @@ class MemoryStore:
             # Access counters are not a synchronous disk-write on every query.
             self.condition.notify_all()
         if return_records:
-            return [{**asdict(r), 'text': excerpt, 'text_truncated': excerpt != r.text} for r, excerpt in selected]
-        return '### Relevant memories\n' + '\n'.join(
-            f'- [{r.memory_type}; {"derived interpretation" if r.derived else "original"}; id={r.id}{"; excerpt" if text != r.text else ""}] {text} (tags: {", ".join(r.tags)})'
-            for r, text in selected)
+            return [{**{k: v for k, v in asdict(r).items() if k != 'formation_context'}, 'text': excerpt, 'text_truncated': excerpt != r.text} for r, excerpt in selected]
+        # One JSON object per memory, which conversation/chat.py frames as untrusted recalled data (recalled()): the encoding
+        # keeps a stored newline or 'SYSTEM:' line inside its string, so nothing a memory quotes can pose as a message.
+        return '\n'.join(json.dumps({'id': r.id, 'type': r.memory_type, 'origin': 'derived interpretation' if r.derived else 'original',
+            **({'excerpt': True} if text != r.text else {}), 'tags': list(r.tags), 'text': text}, ensure_ascii=False) for r, text in selected)
 
     def close(self):
         with self.condition:

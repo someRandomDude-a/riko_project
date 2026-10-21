@@ -13,20 +13,23 @@
     "start": "electron ."
   },
   "dependencies": {
-    "@pixiv/three-vrm": "^3.5.5",
-    "@pixiv/three-vrm-animation": "^3.5.5",
-    "@vitejs/plugin-react": "^4.3.4",
-    "electron": "latest",
-    "katex": "^0.18.10",
-    "lucide-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "react-markdown": "^10.1.0",
-    "rehype-katex": "^7.0.1",
-    "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0",
-    "three": "^0.186.1",
-    "vite": "^6.4.3",
-    "yaml": "^2.9.1"
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@pixiv/three-vrm": "3.5.5",
+    "@pixiv/three-vrm-animation": "3.5.5",
+    "@vitejs/plugin-react": "4.7.0",
+    "electron": "44.4.5",
+    "electron-builder": "26.0.12",
+    "katex": "0.18.10",
+    "lucide-react": "1.48.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "rehype-katex": "7.0.1",
+    "remark-gfm": "4.0.1",
+    "remark-math": "6.0.0",
+    "three": "0.186.1",
+    "vite": "6.4.3"
   }
 }

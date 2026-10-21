@@ -47,13 +47,14 @@ class Job:
 
 
 class CompanionBot(commands.Bot):
-    def __init__(self, settings, *, backend_factory=BackendClient):
+    def __init__(self, settings, *, preferences, backend_factory=BackendClient):
+        """preferences: the channel preferences file (DataPaths.discord_preferences)."""
         intents = discord.Intents.default()
         intents.message_content = True
         intents.voice_states = True
         super().__init__(command_prefix='!', intents=intents, allowed_mentions=discord.AllowedMentions.none())
         self.settings = settings
-        self.preferences = Preferences(settings.root / 'persistent_memories/discord_preferences.json')
+        self.preferences = Preferences(preferences)
         self.backend = backend_factory(settings.backend_url, self.backend_event, self.backend_disconnected)
         self.queue = asyncio.Queue(maxsize=8)
         self.processor = None
@@ -73,7 +74,7 @@ class CompanionBot(commands.Bot):
         await self.backend.open()
         await asyncio.wait_for(self.backend.ready.wait(), timeout=10)
         await self.add_cog(CompanionCommands(self))
-        self.processor = asyncio.create_task(self.process_queue(), name='discord-turn-queue')
+        self.start_processor()
         if self.settings.sync_guild:
             guild = discord.Object(id=self.settings.sync_guild)
             self.tree.copy_global_to(guild=guild)
@@ -129,31 +130,43 @@ class CompanionBot(commands.Bot):
             return False
         return True
 
+    def start_processor(self):
+        self.processor = asyncio.create_task(self.process_queue(), name='discord-turn-queue')
+        self.processor.add_done_callback(self.processor_stopped)
+
+    def processor_stopped(self, task):
+        # Cancelled means close() or loop shutdown; any other end is a bug that must not silence chat replies.
+        if self.closing or task.cancelled() or task is not self.processor: return
+        logger.error('Discord turn queue stopped unexpectedly; restarting it', exc_info=task.exception())
+        self.start_processor()
+
     async def process_queue(self):
+        # Discord's HTTP layer passes connection drops through as aiohttp/OS errors, not HTTPException,
+        # so every Discord call below is guarded: one failed reply never ends the queue before close.
         while not self.closing:
             job = await self.queue.get()
             self.active = job
             try:
                 job.task = asyncio.create_task(self.process_job(job))
                 try: await job.task
-                except asyncio.CancelledError:
-                    if self.closing: raise
-                    if job.stream:
-                        with contextlib.suppress(discord.HTTPException): await job.stream.finish()
+                except asyncio.CancelledError: # A stopped turn ends here; the queue itself stops only when cancelled.
+                    if self.closing or asyncio.current_task().cancelling(): raise
                 except Exception as exc:
                     logger.exception('Discord turn failed')
                     text = str(exc) if isinstance(exc, (BackendError, ValueError)) else 'Request failed; check the bot/backend logs.'
-                    with contextlib.suppress(discord.HTTPException): await job.send(text[:1800])
+                    try: await job.send(text[:1800])
+                    except Exception as error: logger.warning('Discord could not report the failed turn: %r', error)
             finally:
-                if job.stream:
-                    with contextlib.suppress(discord.HTTPException): await job.stream.finish()
-                if job.reasoning:
-                    with contextlib.suppress(discord.HTTPException): await job.reasoning.finish()
-                for key, view in list(self.approvals.items()):
-                    if view.job is job:
-                        await view.finish(); self.approvals.pop(key, None)
-                self.active = None
-                self.queue.task_done()
+                try: await self.finish_job(job)
+                finally:
+                    self.active = None
+                    self.queue.task_done()
+
+    async def finish_job(self, job):
+        views = [self.approvals.pop(key) for key, view in list(self.approvals.items()) if view.job is job]
+        for step in [reply.finish for reply in (job.stream, job.reasoning) if reply] + [view.finish for view in views]:
+            try: await step() # Each step on its own: one Discord failure must not skip the rest.
+            except Exception: logger.exception('Discord turn cleanup failed')
 
     async def process_job(self, job):
         if not self.settings.allows(job.user.id, job.channel.id, guild=getattr(job.channel, 'guild', None) is not None):

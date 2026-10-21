@@ -18,12 +18,9 @@ test('popups use adjacent free space instead of covering a bottom-edge dock',()=
  const b={x:900,y:980,width:88,height:100};
  assert.deepEqual(dockPopupPlacement('transcript',b,screen,size,viewport),{left:1200,top:1080});
 });
+// The frameless, shadowless chat window and its gesture lock are window_manager.test.mjs behaviour.
 test('transparent chat clears document layers and leaves button material alone',()=>{
  const css=fs.readFileSync(new URL('./ui/morph.css',import.meta.url),'utf8');
  assert.match(css,/html\.transparent-chat body/);
  assert.match(css,/\.app-shell,\.app-body,\.primary-view,\.chat-host,\.stream-chat/);
- const host=fs.readFileSync(new URL('../main.cjs',import.meta.url),'utf8');
- assert.match(host,/thickFrame:false, hasShadow:false/);
- assert.match(host,/windowGesture!==g/);
- assert.match(host,/!windowGesture\)control.setIgnoreMouseEvents/);
 });

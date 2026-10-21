@@ -60,6 +60,7 @@ html.transparent-chat .app-shell::before,html.transparent-chat .app-shell::after
 .screen-border-effect{position:fixed;inset:0;border-radius:12px;z-index:40;}
 @keyframes border-rainbow{to{background-position:0 200%;}}
 @keyframes border-pulse{50%{opacity:calc(.65 - var(--effect-level) * .4);}}
+.configured-borders.effect-still::before,.configured-borders .dock-mic.effect-still::after,.screen-border-effect.effect-still{animation:none!important;}
 .reduce-motion .configured-borders::before,.reduce-motion .configured-borders .dock-mic::after,.reduce-motion .screen-border-effect{animation:none!important;}
 @media(prefers-reduced-motion:reduce){.configured-borders::before,.configured-borders .dock-mic::after,.screen-border-effect{animation:none!important;}}
 .mode-collapsed .glass-dock{height:var(--collapsed-size)!important;padding:0!important;position:relative;overflow:hidden;}

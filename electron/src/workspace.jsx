@@ -3,9 +3,12 @@ import {Mic, Volume2, Moon} from './ui/icons.jsx';
 import Whiteboard from './whiteboard.jsx';
 import useRuntime from './use_runtime.jsx';
 import {request} from './api.mjs';
+import {pick} from './runtime_store.mjs';
+
+const selectCanvas=pick(['whiteboard','whiteboard_pages','whiteboard_page','tools']);
 
 export default function Workspace() {
-  const state = useRuntime();
+  const state = useRuntime(selectCanvas);
   const [tab, setTab] = useState('board'), [error, setError] = useState('');
   async function toggle(path) {
     try {await request(path, {method: 'POST'}); setError('');}

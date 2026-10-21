@@ -12,7 +12,7 @@ def dispatch(request, server):
     if method == 'initialize':
         version = request.get('params', {}).get('protocolVersion', '2024-11-05')
         if version not in {'2024-11-05', '2025-03-26', '2025-06-18'}: version = '2024-11-05'
-        return {'protocolVersion': version, 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'riko-tasks', 'version': '1.0'}}
+        return {'protocolVersion': version, 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'riko-tasks', 'version': '1.1'}}
     if method == 'ping': return {}
     if method == 'tools/list': return {'tools': server.list_tools()}
     if method == 'tools/call':
@@ -25,8 +25,12 @@ def main():
     sys.stdin.reconfigure(encoding='utf-8')
     sys.stdout.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser()
-    parser.add_argument('--store', type=Path, default=Path(__file__).resolve().parent.parent / 'persistent_memories' / 'tasks.sqlite3')
+    parser.add_argument('--store', type=Path, help="default: the backend's store, tasks.store_file in the YAML at RIKO_CONFIG "
+        'against RIKO_DATA_DIR (default: the checkout), as run_server resolves them')
     args = parser.parse_args()
+    if args.store is None:
+        from process.app_core.configuration.paths import from_environment
+        args.store = from_environment().tasks
     server = TaskMCP(TaskStore(args.store), actor='external_mcp')
     for line in sys.stdin:
         try:

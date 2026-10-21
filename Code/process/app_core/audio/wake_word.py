@@ -1,13 +1,16 @@
 """Few-shot EfficientWord-Net enrollment; no ASR runs while waiting for wake."""
 from collections import deque
-from ..runtime.workers import DaemonExecutor
+from ..kernel.workers import DaemonExecutor
 from hashlib import sha256
 import json
-import os
+import logging
 import threading
 import time
 
 from ..events.bus import event_bus
+from ..events.outbox import Outbox
+from ..kernel.audio_config import FRAME_SECONDS, wake_phrase
+from ..persistence.atomic import atomic_write
 from .wake_capture import WakeCapture, prepare_audio
 
 
@@ -19,25 +22,24 @@ def profile_key(phrase, device):
 
 class WakeWord:
     def __init__(self, config):
-        settings = config.raw.get("voice", {})
-        self.mode = settings.get("mode", "wake_word")
-        if self.mode not in {"wake_word", "continuous", "manual"}:
-            raise ValueError("voice.mode must be wake_word, continuous or manual")
-        self.phrase = settings.get("wake_word", config.character_name).strip()
-        if not self.phrase or len(self.phrase.split()) != 1:
-            raise ValueError("This enrollment detector requires a single short wake name")
-        self.threshold = float(settings.get("wake_threshold", .9))
-        self.config_threshold = self.threshold
-        self.followup = float(settings.get("follow_up_seconds", 10))
-        if not 0 < self.threshold < 1 or not 0 < self.followup <= 300:
-            raise ValueError("Invalid wake threshold or follow-up duration")
-        self.directory = config.root / "persistent_memories" / "wake_words"
+        voice = config.voice  # mode, threshold and follow-up already checked (VoiceConfig.from_raw)
+        self.mode = voice.mode
+        self.phrase, problem = wake_phrase(voice, config.character_name)
+        # An unusable wake word disables only enrollment and keyword detection: startup, chat, Speak now and the
+        # other modes still work, and the status shows why.
+        self.unavailable = f'Wake word “{self.phrase}” cannot be used. {problem}. Change it in Settings and restart Python.' if problem else ''
+        if self.unavailable: logging.getLogger(__name__).warning('%s', self.unavailable)
+        # voice.wake_threshold starts each new enrollment; an enrolled profile keeps the threshold saved with it (bind_device).
+        self.threshold = self.config_threshold = voice.wake_threshold
+        self.followup = voice.follow_up_seconds
+        self.directory = config.paths.wake_words
         self.lock = threading.RLock()
+        self.outbox = Outbox(event_bus)
         self.worker = DaemonExecutor(max_workers=1, thread_name_prefix="wake-detector", max_pending=2)
         self.model = None
         self.embeddings = []
         self.samples = []
-        self.window = deque(maxlen=47)  # 1.5 seconds, 512-sample input blocks.
+        self.window = deque(maxlen=round(1.5 / FRAME_SECONDS))  # 1.5 seconds of capture blocks (47)
         self.device = None
         self.path = None
         self.job = None
@@ -48,7 +50,7 @@ class WakeWord:
         self.calibrating = False
         self.closed = False
         self.testing = False
-        self.error = ""
+        self.error = self.unavailable
         self.counter = 0
         self.live_capture = WakeCapture()
         self.last_score = None
@@ -63,9 +65,9 @@ class WakeWord:
             self.path = self.directory / (profile_key(self.phrase, identity) + '.json')
             self.embeddings, self.samples = [], []
             self.threshold = self.config_threshold
-            self.error = ''
+            self.error = self.unavailable
             self.testing = False
-            if self.path.exists():
+            if not self.unavailable and self.path.exists():
                 try:
                     data = json.loads(self.path.read_text(encoding='utf8'))
                     if data.get('key') != self.path.stem: raise ValueError('Enrollment identity mismatch')
@@ -144,6 +146,7 @@ class WakeWord:
 
     def begin_calibration(self):
         with self.lock:
+            if self.unavailable: raise ValueError(self.unavailable)
             if self.device is None: raise ValueError('Start microphone capture first')
             self.calibrating = True
             self.testing = False
@@ -168,11 +171,8 @@ class WakeWord:
             if self.recording is not None or (self.job and not self.job.done()):
                 raise ValueError('Wait until recording has finished')
             if len(self.samples) < 6: raise ValueError('Record all six samples first')
-            self.directory.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_suffix('.tmp')
-            temporary.write_text(json.dumps({'key': self.path.stem, 'embeddings': self.samples,
-                                            'model_type': 'resnet_50_arc', 'threshold': self.threshold}), encoding='utf8')
-            os.replace(temporary, self.path)
+            atomic_write(self.path, json.dumps({'key': self.path.stem, 'embeddings': self.samples,
+                                                'model_type': 'resnet_50_arc', 'threshold': self.threshold}))
             self.embeddings = list(self.samples)
             self.calibrating = False
             self.deadline = 0
@@ -187,9 +187,7 @@ class WakeWord:
             if self.path and self.embeddings:
                 data = json.loads(self.path.read_text(encoding='utf8'))
                 data['threshold'] = threshold
-                temporary = self.path.with_suffix('.tmp')
-                temporary.write_text(json.dumps(data), encoding='utf8')
-                os.replace(temporary, self.path)
+                atomic_write(self.path, json.dumps(data))
         self.publish()
 
     def set_testing(self, enabled):
@@ -211,6 +209,11 @@ class WakeWord:
         self.publish()
 
     def feed(self, frame, speaking=False):
+        try:
+            self._feed(frame, speaking)
+        finally: self.outbox.flush()
+
+    def _feed(self, frame, speaking):
         with self.lock:
             if self.closed: return
             if self.recording is not None:
@@ -218,14 +221,14 @@ class WakeWord:
                 if outcome == 'timeout':
                     self.recording = None
                     self.error = 'Five-second limit reached; sample discarded. Click Record and try again.'
-                    event_bus.publish('voice.calibration_discarded', error=self.error)
-                    self.publish()
+                    self.outbox.put('voice.calibration_discarded', error=self.error)
+                    self.outbox.defer(self.publish)
                 elif outcome == 'complete':
                     self.recording = None
                     self.job = self.worker.submit(self._enroll, pcm)
                 return
             testing = getattr(self, 'testing', False)
-            if self.calibrating or (self.mode != 'wake_word' and not testing) or (self.active() and not testing):
+            if self.calibrating or self.unavailable or (self.mode != 'wake_word' and not testing) or (self.active() and not testing):
                 self.live_capture = WakeCapture()
                 return
             outcome, pcm = self.live_capture.feed(frame, speaking)
@@ -239,7 +242,7 @@ class WakeWord:
                     return
             self.window.append(frame)
             self.counter += 1
-            if not self.embeddings or len(self.window) < 47 or self.counter % 8: return
+            if not self.embeddings or len(self.window) < self.window.maxlen or self.counter % 8: return
             if self.job and not self.job.done(): return
             self._schedule_detection(b''.join(self.window))
 

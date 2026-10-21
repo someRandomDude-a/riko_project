@@ -1,6 +1,8 @@
 """Small Discord-only preferences; runtime/model settings remain in SettingsStore."""
 import json
 
+from ...persistence.atomic import atomic_write
+
 
 class Preferences:
     def __init__(self, path):
@@ -19,10 +21,7 @@ class Preferences:
     def get(self, channel_id, name): return self.channels.get(str(channel_id), {}).get(name, False)
 
     def save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix('.tmp')
-        temporary.write_text(json.dumps({'channels': self.channels, 'initiative_channel': self.initiative_channel}, indent=2), encoding='utf-8')
-        temporary.replace(self.path)
+        atomic_write(self.path, json.dumps({'channels': self.channels, 'initiative_channel': self.initiative_channel}, indent=2))
 
     def set(self, channel_id, name, enabled):
         if name not in {'audio', 'reasoning'} or type(enabled) is not bool: raise ValueError('Invalid Discord preference')

@@ -3,36 +3,14 @@ import pathlib
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-from .base import BaseTool, ToolType
+from .base import BaseTool
 
 
 class Tool(BaseTool):
     TOOL_NAME = "todo_list"
     TOOL_DESCRIPTION = "Manage a persistent to-do list: add, remove, list, complete, and clear tasks."
-    TOOL_TYPE = ToolType.FUNCTION
 
-    MCP_PROMPT = """todo_list:
-  Manage a persistent to-do list. All tasks are saved automatically.
-
-  Actions:
-    list                          - Show all tasks with their status.
-    add <task description>        - Add a new task (e.g., "add Buy groceries").
-    remove <task_id>              - Remove a task by its ID (shown in list).
-    complete <task_id>            - Mark a task as done (toggle).
-    clear                         - Delete all tasks.
-
-  Task IDs are shown in the list output (e.g., "[1] Buy milk").
-  Tasks are stored in './persistent_memories/mcp_modules/todo_list/tasks.json'.
-
-  Examples:
-    todo_list(action="list")                      -> Shows all tasks.
-    todo_list(action="add", task="Write report")  -> Adds a new task.
-    todo_list(action="complete", task_id="2")     -> Toggles task #2 as done.
-    todo_list(action="remove", task_id="3")       -> Deletes task #3.
-    todo_list(action="clear")                     -> Removes all tasks.
-"""
-
-    # Persistent storage
+    # Persistent storage: config['data_directory'] (DataPaths.todo_list, from the registry); standalone, the cwd's folder.
     DATA_DIR = pathlib.Path("./persistent_memories/mcp_modules/todo_list")
     DATA_FILE = DATA_DIR / "tasks.json"
 
@@ -41,19 +19,46 @@ class Tool(BaseTool):
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     def _load_tasks(self) -> List[Dict[str, Any]]:
-        """Load tasks from the JSON file, or return an empty list."""
+        """Load tasks. An unreadable list is kept aside and reported, never silently replaced."""
         self._ensure_storage()
+        self._next_id = 1
         if not self.DATA_FILE.exists():
             return []
         try:
             with open(self.DATA_FILE, "r", encoding="utf-8") as f:
-                tasks = json.load(f)
-                if isinstance(tasks, list):
-                    return tasks
-                else:
-                    return []
-        except (json.JSONDecodeError, IOError):
-            return []
+                data = json.load(f)
+            if isinstance(data, list): data = {"tasks": data}  # Saved before the ID counter existed.
+            tasks = data.get("tasks") if isinstance(data, dict) else None
+            if not isinstance(tasks, list) or not all(isinstance(t, dict) and isinstance(t.get("text"), str) for t in tasks):
+                raise ValueError("not a task list")
+        except OSError as exc:
+            raise RuntimeError(f"The to-do list could not be read ({exc}); nothing was changed.") from exc
+        except ValueError as exc:
+            backup = self.DATA_FILE.with_name(f"tasks.json.unreadable-{datetime.now():%Y%m%d-%H%M%S-%f}")
+            self.DATA_FILE.replace(backup)
+            raise RuntimeError(f"The to-do list file was unreadable and was kept as {backup.name}; "
+                               "a new list starts with the next change.") from exc
+        # Stable IDs that are never reused: the counter survives removals and clear. Lists saved
+        # before IDs existed are numbered in their current order; duplicate IDs get fresh ones.
+        next_id = max((t["id"] for t in tasks if type(t.get("id")) is int), default=0) + 1
+        if type(data.get("next_id")) is int: next_id = max(next_id, data["next_id"])
+        seen = set()
+        for t in tasks:
+            if type(t.get("id")) is not int or t["id"] in seen:
+                t["id"], next_id = next_id, next_id + 1
+            seen.add(t["id"])
+        self._next_id = next_id
+        return tasks
+
+    @staticmethod
+    def _find(tasks: List[Dict[str, Any]], task_id: Optional[str]) -> Dict[str, Any]:
+        if task_id is None or not str(task_id).strip():
+            raise ValueError("Please provide a task ID from the list (e.g., task_id=\"2\").")
+        try: wanted = int(str(task_id).strip())
+        except ValueError: raise ValueError(f"Invalid task ID: '{task_id}'. Please use the number shown in the list.") from None
+        for t in tasks:
+            if t["id"] == wanted: return t
+        raise ValueError(f"Task ID {task_id} not found.")
 
     def _save_tasks(self, tasks: List[Dict[str, Any]]) -> None:
         """Save tasks to the JSON file atomically (via temp file)."""
@@ -67,7 +72,7 @@ class Tool(BaseTool):
             delete=False,
             encoding="utf-8"
         ) as tmp:
-            json.dump(tasks, tmp, indent=2)
+            json.dump({"next_id": self._next_id, "tasks": tasks}, tmp, indent=2)
             tmp.flush()
             os.fsync(tmp.fileno())
             temp_path = pathlib.Path(tmp.name)
@@ -88,48 +93,35 @@ class Tool(BaseTool):
             if not tasks:
                 return "📭 Your to‑do list is empty."
             lines = ["📋 **Your To‑Do List:**"]
-            for idx, t in enumerate(tasks, start=1):
+            for t in tasks:
                 status = "✅" if t.get("done", False) else "⬜"
-                lines.append(f"{idx}. {status} {t['text']}")
+                lines.append(f"{t['id']}. {status} {t['text']}")
             return "\n".join(lines)
 
         elif action == "add":
             if not task or not task.strip():
-                return "❌ Please provide a task description (e.g., `add Buy milk`)."
+                raise ValueError("Please provide a task description (e.g., task=\"Buy milk\").")
+            new_id, self._next_id = self._next_id, self._next_id + 1
             tasks.append({
+                "id": new_id,
                 "text": task.strip(),
                 "done": False,
                 "created_at": datetime.now().isoformat(timespec="minutes")
             })
             self._save_tasks(tasks)
-            return f"✅ Added task: '{task.strip()}' (ID: {len(tasks)})"
+            return f"✅ Added task: '{task.strip()}' (ID: {new_id})"
 
         elif action == "complete":
-            if task_id is None or not task_id.strip():
-                return "❌ Please provide a task ID (e.g., `complete 2`)."
-            try:
-                idx = int(task_id.strip()) - 1
-                if idx < 0 or idx >= len(tasks):
-                    return f"❌ Task ID {task_id} not found."
-                tasks[idx]["done"] = not tasks[idx].get("done", False)
-                status = "done" if tasks[idx]["done"] else "undone"
-                self._save_tasks(tasks)
-                return f"✅ Task {task_id} marked as {status}."
-            except ValueError:
-                return f"❌ Invalid task ID: '{task_id}'. Please use a number."
+            found = self._find(tasks, task_id)
+            found["done"] = not found.get("done", False)
+            self._save_tasks(tasks)
+            return f"✅ Task {found['id']} marked as {'done' if found['done'] else 'undone'}."
 
         elif action == "remove":
-            if task_id is None or not task_id.strip():
-                return "❌ Please provide a task ID (e.g., `remove 2`)."
-            try:
-                idx = int(task_id.strip()) - 1
-                if idx < 0 or idx >= len(tasks):
-                    return f"❌ Task ID {task_id} not found."
-                removed = tasks.pop(idx)
-                self._save_tasks(tasks)
-                return f"✅ Removed task: '{removed['text']}'"
-            except ValueError:
-                return f"❌ Invalid task ID: '{task_id}'. Please use a number."
+            found = self._find(tasks, task_id)
+            tasks.remove(found)
+            self._save_tasks(tasks)
+            return f"✅ Removed task {found['id']}: '{found['text']}'"
 
         elif action == "clear":
             if not tasks:
@@ -138,11 +130,14 @@ class Tool(BaseTool):
             return "🗑️ All tasks have been cleared."
 
         else:
-            return f"❌ Unknown action: '{action}'. Available: list, add, complete, remove, clear."
+            raise ValueError(f"Unknown action: '{action}'. Available: list, add, complete, remove, clear.")
 
     # ------------------------------------------------------------------
     # (Optional) Initialisation: ensure directory exists
     # ------------------------------------------------------------------
     def _setup(self):
-        """Ensure the storage directory exists on startup."""
+        """Use the configured folder, and ensure the storage directory exists on startup."""
+        if self.config.get("data_directory"):
+            self.DATA_DIR = pathlib.Path(self.config["data_directory"])
+            self.DATA_FILE = self.DATA_DIR / "tasks.json"
         self._ensure_storage()

@@ -43,12 +43,6 @@ test('settings edits no longer mirror budgets, temperatures or output into other
   assert.doesNotMatch(change,/syncPool|next\[budget\]|next\[outputPath\]|next\[temperaturePath\]|hf_revision/);
 });
 
-test('transparent interaction does not enable focus or throttle feedback when hidden',()=>{
-  const host=fs.readFileSync(new URL('../main.cjs',import.meta.url),'utf8');
-  assert.match(host,/overlay\.setFocusable\(false\)/);assert.match(host,/overlay\.showInactive\(\)/);
-  assert.doesNotMatch(host,/overlay\.(?:focus|show)\(/);assert.match(host,/backgroundThrottling:false/);
-});
-
 test('reply speech clouds stream the current turn and ignore stale snapshots/deltas',()=>{
   let state=reduceOverlayReply(initialReply,{type:'model.started',turn_id:'turn'});
   state=reduceOverlayReply(state,{type:'chat.delta',turn_id:'turn',payload:{text:'New reply'}});
@@ -56,4 +50,13 @@ test('reply speech clouds stream the current turn and ignore stale snapshots/del
   state=reduceOverlayReply(state,{type:'chat.completed',turn_id:'turn',payload:{text:'New reply'}});
   state=reduceOverlayReply(state,{type:'state.snapshot',payload:{speech:'old reply',runtime:{generating:false}}});
   assert.equal(state.text,'New reply');assert.equal(state.generating,false);
+});
+
+test('a waiting tool approval takes the overlay pointer only while it is over the card',()=>{
+  const source=fs.readFileSync(new URL('./tool_approvals.jsx',import.meta.url),'utf8');
+  assert.doesNotMatch(source,/approvalBridge\?\.interactive\(!!item\)/);
+  assert.match(source,/closest\?\.\('\.overlay-approval'\)/);
+  // Click-through forwarding delivers mousemove (macOS/Windows); the Linux replay delivers pointermove.
+  // main_wiring.test.mjs checks that the Linux preload replays forwarded positions as pointermove.
+  assert.match(source,/addEventListener\('mousemove',hit,true\)/);assert.match(source,/addEventListener\('pointermove',hit,true\)/);
 });

@@ -21,6 +21,39 @@ the preceding visible UTF-8 prefix. CUDA/Vulkan kernels, sampling, quantization,
 tokenization and KV-cache algorithms stay upstream. The C ABI transport and its
 exception/cancellation cleanup live in our separate `riko-native.cpp`.
 
+The CMake target gives `riko-native` an `$ORIGIN` (`@loader_path` on macOS) install
+rpath unless `CMAKE_INSTALL_RPATH` is set, and refuses a static Linux configure
+(`BUILD_SHARED_LIBS=OFF`) without `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`: the shared
+bridge links llama-common, llama and ggml, which are then static and
+position-dependent, so the link fails otherwise.
+
+`riko_create` loads ggml's backends from the bridge's own folder before
+`llama_backend_init` when none are registered. That matters only for a
+`GGML_BACKEND_DL` build, whose backends are modules (`ggml-cuda.dll`,
+`libggml-cpu-haswell.so`, and `.so` on macOS too) that ggml itself looks for only
+beside the executable (python, riko-backend) and in the working directory. On
+Windows it first loads each module with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR`, because
+ggml's `LoadLibraryW` would look for cudart and cuBLAS beside the executable and
+on PATH. When the folder holds a GPU module but no GPU device registered (no
+driver, no Vulkan loader, or no ROCm runtime for `ggml-hip`), it logs a
+`riko-native: no GPU device from ...` warning and returns it with `riko_create`'s
+notes. A build that links its backends (the default, and the Metal bundle) is
+unaffected.
+
+`riko_devices(buffer, capacity)` writes ggml's devices into the caller's buffer as
+`{"version":1,"devices":[{"index","name","description","backend","type","device_id","memory_free","memory_total"}]}`
+(memory in bytes, `type` one of cpu/gpu/igpu/accel/other, `device_id` the PCI bus
+id or null) and returns the JSON's length; a result of `capacity` or more means the
+buffer was too small and nothing was written, `-2` that no `riko_create` has run in
+this process yet (that call initialises the backends, so its log scope keeps their
+warnings), and `-1` a failure with its message in the buffer. It is safe from any
+thread once initialised, also while contexts load or run: it asks each device for
+its memory as llama.cpp's own load does (`cudaMemGetInfo`/`hipMemGetInfo`, Vulkan's
+memory budget, or Metal's recommended working set, whose free figure counts only
+this process's Metal allocations). The app treats it as optional, so an older
+bridge with the first five exports still loads and GPU telemetry falls back to
+other sources; the release check requires it and a CPU device in its list.
+
 Windows NVCC can repeatedly warn #221 when MSVC expands the upstream `INFINITY`
 max-reduction sentinel. Release CUDA builds suppress that diagnostic through
 `--diag-suppress=221`, without changing the sentinel or disabling other diagnostic
@@ -47,6 +80,29 @@ cmake --build .native/llama.cpp/build-cpu --config Release --target riko-native 
 
 This CPU DLL does not provide GPU main-model inference. The probe's CPU-only
 setting is independent of the backend used to build llama.cpp.
+
+On Linux with ROCm 6.1 or later (llama.cpp's minimum; `hipconfig` plus the
+hipBLAS and rocBLAS development packages), a HIP build for your GPU, whose
+`gfx` name `rocminfo | grep gfx` prints:
+
+```bash
+HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" cmake -S .native/llama.cpp -B .native/llama.cpp/build-hip -DGGML_HIP=ON -DGPU_TARGETS=gfx1100 -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DRIKO_NATIVE_BRIDGE_SOURCE="$PWD/tools/llama_cpp/riko-native.cpp"
+cmake --build .native/llama.cpp/build-hip --target riko-native -j "$(nproc)"
+```
+
+The release's opt-in `hip` bundle is
+`python3 tools/release/build.py --smoke-bundle hip <clean checkout at the pin> <folder>/hip`
+inside `rocm/dev-ubuntu-22.04:7.2.1` (`.github/actions/hip-bundle`, with the GPU
+target list from `electron/native_backends.json`), then
+`build.py --check-bundle <folder>/hip/libriko-native.so`, which loads it there
+without a GPU. That bundle links the user's ROCm 7 (`libamdhip64.so.7`, hipBLAS,
+rocBLAS) and finds it beside itself or in `/opt/rocm/lib`. CI only compiles and
+loads it: no runner has an AMD GPU, so it has not run a model on one.
+
+For a self-contained folder exactly as a release builds it (the manifest's flags,
+an rpath that finds each library beside it, versioned links kept), run
+`python tools/release/build.py --smoke-bundle <backend> <clean checkout at the pin> <folder>`;
+it applies the patch itself.
 
 Configure `runtime.native_library` to that build's `riko-native.dll`, keeping
 its dependent llama/ggml DLLs beside it. The external llama-server backend is
@@ -147,4 +203,4 @@ The CPU DLL has compiled and loaded successfully on Windows/MSVC. Automated
 tests use mocked native requests and teacher outputs to check UTF-8 streaming,
 errors, cancellation, timeouts, cleanup ordering, CPU placement, stale-turn
 rejection, fallback and artifact isolation. These checks do not establish live
-hidden-state alignment, Julia training quality, CUDA compatibility or speed.
+hidden-state alignment, Julia training quality, CUDA or ROCm compatibility or speed.

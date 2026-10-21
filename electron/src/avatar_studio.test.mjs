@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Bone,Group,Quaternion,Vector3} from 'three';
-import {normalizeBone,normalizeProfile,normalizeStudio,importStudioPreset,importGLSL} from './avatar_studio_settings.mjs';
+import {normalizeBone,normalizeProfile,normalizeStudio,importStudioPreset,importGLSL,PICKUP_FIELDS,REACTION_FIELDS,FACE_FIELDS,GAZE_FIELDS,GAZE_TOGGLES,GRAB_STYLES,RELEASE_STYLES} from './avatar_studio_settings.mjs';
 import {boneCatalog,AvatarSecondaryMotion,AvatarSkeletonDebug} from './avatar_secondary.mjs';
 import {AvatarEffects} from './avatar_effects.mjs';
 
@@ -22,6 +22,7 @@ test('studio normalization bounds bone physics, offsets, lights and shader impor
  assert.equal(p.lighting.lights.length,8);assert.equal(p.lighting.lights[0].intensity,20);assert.equal(p.effect.exposure,0);assert.equal(p.effect.glsl,'');
  assert.deepEqual(normalizeStudio({avatarStudioProfiles:null}),{avatarStudioProfiles:{}});
  assert.equal(normalizeBone({}).enabled,false);
+ assert.deepEqual(normalizeProfile({}).face,{restingSmile:.15,intensity:1});assert.deepEqual(normalizeProfile({face:{restingSmile:2,intensity:-1}}).face,{restingSmile:.6,intensity:0});
 });
 test('position calibration is non-cumulative and removing overrides restores imported springs',()=>{
  const {hair,joint,catalog,secondary}=fixture(),id=catalog.entries.find(e=>e.node===hair).id;
@@ -63,4 +64,22 @@ test('lights update without duplication and post effects preserve source alpha',
  assert.match(effects.material.fragmentShader,/source\.a/);effects.render(scene,{},profile);assert.equal(effects.target.width,200);
  let message='';effects.report=text=>{message=text;};renderer.debug.onShaderError({getShaderInfoLog:()=> 'bad shader'},null,null,null);assert.equal(effects.failed,true);assert.match(message,/disabled/);
  effects.dispose();assert.equal(scene.children.length,0);
+});
+test('pickup and reaction settings default, clamp, fall back on unknown choices and drop the old gravity-rig keys',()=>{
+ const p=normalizeProfile({});
+ assert.deepEqual(Object.keys(p.pickup).sort(),['enabled','grabStyle','release','ragdollEnabled',...PICKUP_FIELDS.map(([key])=>key)].sort());
+ assert.equal(p.pickup.grabStyle,'scruff');assert.equal(p.pickup.enabled,true);assert.equal(p.pickup.ragdollEnabled,false);assert.deepEqual(p.reactions,{enabled:true,protestSeconds:6,resignSeconds:18,kickAmplitude:22});
+ assert.deepEqual([p.pickup.scruffPitch,p.pickup.swingFrequency,p.pickup.swingDamping,p.pickup.swingLimit,p.pickup.carryGain,p.pickup.airLean,p.pickup.limbFrequency,p.pickup.limbDamping,p.pickup.headStabilize,p.pickup.recoverySeconds],[30,1,.28,35,1,10,1.8,.35,.65,2.5]);
+ assert.deepEqual([p.pickup.release,p.pickup.throwSpeed,p.pickup.fallGravity,p.pickup.landingSquash],['throw',900,.7,1]);
+ assert.equal(normalizeProfile({pickup:{release:'place'}}).pickup.release,'place');assert.equal(normalizeProfile({pickup:{release:'yeet'}}).pickup.release,'throw');assert.deepEqual(RELEASE_STYLES.map(([key])=>key),['throw','place','fall']);
+ assert.deepEqual(GAZE_TOGGLES.map(([key])=>p.gaze[key]),[true,true,true],'tracking, convergence and eye jumps default on');assert.equal(normalizeProfile({gaze:{saccades:false}}).gaze.saccades,false);
+ for(const [section,fields] of [['pickup',PICKUP_FIELDS],['reactions',REACTION_FIELDS],['face',FACE_FIELDS],['gaze',GAZE_FIELDS]])for(const [key,,min,max,step,fallback] of fields){
+  assert.equal(p[section][key],fallback,`${section}.${key} default`);assert.ok(step>0&&min<max&&fallback>=min&&fallback<=max);
+  assert.equal(normalizeProfile({[section]:{[key]:max*10+100}})[section][key],max);assert.equal(normalizeProfile({[section]:{[key]:min-100}})[section][key],min);assert.equal(normalizeProfile({[section]:{[key]:'7'}})[section][key],fallback);
+ }
+ assert.equal(normalizeProfile({pickup:{grabStyle:'bone'}}).pickup.grabStyle,'bone');assert.equal(normalizeProfile({pickup:{grabStyle:'tail'}}).pickup.grabStyle,'scruff');assert.deepEqual(GRAB_STYLES.map(([key])=>key),['scruff','bone']);
+ assert.equal(normalizeProfile({reactions:{enabled:false}}).reactions.enabled,false);
+ const legacy=normalizeProfile({pickup:{maxSwing:180,bodySpring:40,gravity:9.8,jointLimit:35,damping:.8,inertia:1.2}}).pickup;
+ for(const key of ['maxSwing','bodySpring','gravity','jointLimit','damping','inertia'])assert.equal(key in legacy,false,`${key} is ignored`);
+ assert.equal(legacy.swingLimit,35,'a stored 180-degree swing never comes back');
 });

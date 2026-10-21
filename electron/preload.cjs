@@ -1,9 +1,16 @@
 const {contextBridge, ipcRenderer} = require('electron');
+// The backend origin main resolved once (backend_origin.cjs), from this window's --riko-backend= argument: src/api.mjs reads it
+// before the page's first request. A sandboxed preload cannot require that module, so this accepts only the form main sends.
+const backendArgument=process.argv.find(value=>value.startsWith('--riko-backend='))?.slice('--riko-backend='.length)||'';
+contextBridge.exposeInMainWorld('rikoConfig',{backend:/^http:\/\/127\.0\.0\.1:[0-9]{4,5}$/.test(backendArgument)?backendArgument:''});
 contextBridge.exposeInMainWorld('setupBridge',{hardware:()=>ipcRenderer.invoke('setup-hardware'),directory:()=>ipcRenderer.invoke('setup-directory'),model:()=>ipcRenderer.invoke('setup-model'),sovits:()=>ipcRenderer.invoke('setup-sovits'),finish:values=>ipcRenderer.invoke('setup-finish',values)});
 contextBridge.exposeInMainWorld('neuralBridge',{openData:()=>ipcRenderer.invoke('neural-data-open')});
 contextBridge.exposeInMainWorld('gestureBridge',{send:value=>ipcRenderer.send('window-gesture',value)});
 contextBridge.exposeInMainWorld('avatarCursorBridge',{position:()=>ipcRenderer.invoke('avatar-cursor')});
 contextBridge.exposeInMainWorld('overlayInputBridge',{native:process.platform==='win32',drag:(source,active)=>ipcRenderer.send('overlay-drag',{source,active}),position:()=>ipcRenderer.invoke('avatar-cursor'),subscribe:callback=>{const listener=(_event,value)=>callback(value);ipcRenderer.on('overlay-pointer',listener);return()=>ipcRenderer.removeListener('overlay-pointer',listener);}});
+// Linux: main forwards the cursor over a click-through window (pointerForwarder in overlay_input.cjs); replay it as
+// the pointermove that the avatar, popup, approval and compact-chat hit tests listen for.
+if(process.platform==='linux')ipcRenderer.on('forwarded-pointer',(_event,point)=>{if(!Number.isFinite(point?.x)||!Number.isFinite(point?.y))return;(document.elementFromPoint(point.x,point.y)||document.documentElement).dispatchEvent(new PointerEvent('pointermove',{bubbles:true,composed:true,pointerType:'mouse',clientX:point.x,clientY:point.y}));});
 contextBridge.exposeInMainWorld('chatSurfaceBridge',{subscribe:callback=>{const listener=(_event,value)=>callback(value);ipcRenderer.on('chat-surface',listener);return()=>ipcRenderer.removeListener('chat-surface',listener);}});
 contextBridge.exposeInMainWorld('popupBridge',{interactive:value=>ipcRenderer.send('popup-interactive',value)});
 function micAnchor(){const r=document.querySelector('.dock-mic')?.getBoundingClientRect();return r?.width?{x:window.screenX+r.x+r.width/2,y:window.screenY+r.y+r.height/2}:undefined;}
@@ -15,4 +22,4 @@ contextBridge.exposeInMainWorld('controlVisibilityBridge', {get:()=>ipcRenderer.
 contextBridge.exposeInMainWorld('whiteboardBridge', {capture: rect => ipcRenderer.invoke('capture-whiteboard', rect)});
 contextBridge.exposeInMainWorld('processBridge', {sync:()=>ipcRenderer.send('sync-processes')});
 contextBridge.exposeInMainWorld('approvalBridge', {interactive: enabled => ipcRenderer.send('approval-interactive', enabled)});
-contextBridge.exposeInMainWorld('riko', {showControl: () => ipcRenderer.send('show-control'), showWhiteboard: () => ipcRenderer.send('show-whiteboard'), syncSurfaces: state => ipcRenderer.send('sync-surfaces', state), displays: () => ipcRenderer.invoke('displays'), avatarInteractive: enabled => ipcRenderer.send('avatar-interactive', enabled), pickPath: options => ipcRenderer.invoke('pick-path', options), onNavigate: callback => {const listener=(_event,view)=>callback(view);ipcRenderer.on('navigate',listener);return()=>ipcRenderer.removeListener('navigate',listener);}});
+contextBridge.exposeInMainWorld('riko', {showControl: () => ipcRenderer.send('show-control'), showWhiteboard: () => ipcRenderer.send('show-whiteboard'), syncSurfaces: state => ipcRenderer.send('sync-surfaces', state), displays: () => ipcRenderer.invoke('displays'), avatarInteractive: enabled => ipcRenderer.send('avatar-interactive', enabled), pickPath: options => ipcRenderer.invoke('pick-path', options), confirmChange: challenge => ipcRenderer.invoke('confirm-security-change', challenge), settingsDirty: dirty => ipcRenderer.send('settings-dirty', dirty === true), onNavigate: callback => {const listener=(_event,view)=>callback(view);ipcRenderer.on('navigate',listener);return()=>ipcRenderer.removeListener('navigate',listener);}});

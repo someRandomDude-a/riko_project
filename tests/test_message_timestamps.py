@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from process.app_core.conversation.messages import ChatMessage, ModelResponse, conversation_sections
+from process.app_core.kernel.messages import ChatMessage, ModelResponse, conversation_sections
 from process.app_core.conversation.chat import ChatService
 
 

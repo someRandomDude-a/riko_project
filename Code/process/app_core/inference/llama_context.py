@@ -1,37 +1,49 @@
-"""Native model request protocol, context budgeting and priority-ordered slots."""
+"""llama.cpp request protocol, context budgeting and priority-ordered slots, shared by the
+in-process native library and an external llama-server."""
 from contextlib import contextmanager
 import logging
-import queue
 import threading
 import time
 import hashlib
 import uuid
-import math
 
-from .llama_runtime import validate_runtime
+from ..kernel.cancellation import BackgroundPreempted  # defined here before kernel/: old imports from this module still work
+from .llama_runtime import flash_attention, validate_slots
+from .provider import BaseProvider, Generation, ProviderCapabilities
 logger = logging.getLogger(__name__)
 
 
-class BackgroundPreempted(RuntimeError): pass
+PRIORITY = {'live': 0, 'initiative': 1, 'reflection': 2, 'probe_replay': 3}
 
 
 class SlotScheduler:
+    """Slot 0 serves the live lane; initiative and reflection share the others, initiative first and at most one at a time
+    (kv_budget.suggested_pool sizes a unified KV pool for one: an overflow makes llama.cpp abort every slot, live included).
+    probe_replay (EmotionProbe.replay) needs slot 0, where the patch captures, but only while no live request wants it:
+    live demand preempts it whatever pause_background says, and cancel_live never reaches it."""
     def __init__(self, count, *, pause_background=False):
         self.condition = threading.Condition()
         self.count = count
-        self.active = {}
+        self.active = {}  # slot -> (role, stop)
         self.waiting = []
         self.sequence = 0
         self.closed = False
         self.pause_background = pause_background
         self.foreground = False
 
+    def _live_demand(self):
+        return self.foreground or self.active.get(0, ('',))[0] == 'live' or any(t[0] == 0 for t in self.waiting)
+
+    def _preempt(self, live_demand):
+        """Stop what live demand displaces: a replay on slot 0 always, every background request when pausing."""
+        if not live_demand: return
+        for role, stop in self.active.values():
+            if role == 'probe_replay' or (self.pause_background and role != 'live'): stop.set()
+
     def set_foreground(self, active):
         with self.condition:
             self.foreground = active
-            if active and self.pause_background:
-                for role, stop in self.active.values():
-                    if role != 'live': stop.set()
+            self._preempt(active)
             self.condition.notify_all()
 
     def set_pause_background(self, enabled):
@@ -39,31 +51,45 @@ class SlotScheduler:
             self.pause_background = enabled
             self.set_foreground(self.foreground)
 
+    def idle(self):
+        """Nothing running or queued and no foreground turn."""
+        with self.condition: return not self.foreground and not self.active and not self.waiting
+
+    def _grant(self, role, ticket, live_demand):
+        """The slot this ticket takes now, or None."""
+        initiative_running = any(active == 'initiative' for active, _ in self.active.values())
+        if role == 'probe_replay':
+            if live_demand or 0 in self.active or ticket != min(t for t in self.waiting if t[0] == PRIORITY[role]): return None
+            return 0
+        if role == 'live': peers, candidates = [t for t in self.waiting if t[0] == 0], [0]
+        elif role == 'initiative' and initiative_running: return None
+        else:
+            # A queued initiative that must wait for the running one does not hold reflections back.
+            peers = [t for t in self.waiting if t[0] in (1, 2) and not (t[0] == 1 and initiative_running)]
+            candidates = range(1, self.count)
+        if ticket != min(peers): return None
+        return next((s for s in candidates if s not in self.active), None)
+
     @contextmanager
     def lease(self, role, cancelled=lambda: False):
-        priority = {'live': 0, 'initiative': 1, 'reflection': 2}[role]
         with self.condition:
-            ticket = (priority, self.sequence)
+            ticket = (PRIORITY[role], self.sequence)
             self.sequence += 1
             self.waiting.append(ticket)
             try:
                 while True:
                     if self.closed or cancelled(): raise BackgroundPreempted('Inference cancelled while queued')
-                    candidates = [0] if role == 'live' else list(range(1, self.count))
-                    eligible = [t for t in self.waiting if (t[0] == 0) == (priority == 0)]
-                    free = next((s for s in candidates if s not in self.active), None)
-                    live_demand = self.foreground or 0 in self.active or any(t[0] == 0 for t in self.waiting)
-                    if self.pause_background and live_demand:
-                        for active_role, active_stop in self.active.values():
-                            if active_role != 'live': active_stop.set()
-                        if role != 'live' or any(s != 0 for s in self.active):
-                            self.condition.wait(.05)
-                            continue
-                    if ticket == min(eligible) and free is not None:
+                    live_demand = self._live_demand()
+                    self._preempt(live_demand)
+                    if self.pause_background and live_demand and (role != 'live' or any(s != 0 for s in self.active)):
+                        self.condition.wait(.05)
+                        continue
+                    free = self._grant(role, ticket, live_demand)
+                    if free is not None:
                         stop = threading.Event()
                         self.active[free] = (role, stop)
                         break
-                    if role == 'initiative' and free is None:
+                    if role == 'initiative' and not any(r == 'initiative' for r, _ in self.active.values()) and all(s in self.active for s in range(1, self.count)):
                         victim = next((v for s, v in self.active.items() if s != 0 and v[0] == 'reflection'), None)
                         if victim: victim[1].set()
                     self.condition.wait(.05)
@@ -75,8 +101,10 @@ class SlotScheduler:
                 self.condition.notify_all()
 
     def cancel_live(self):
+        """Stop the live request (Stop): never a background request, nor a replay holding slot 0."""
         with self.condition:
-            if 0 in self.active: self.active[0][1].set()
+            role, stop = self.active.get(0, ('', None))
+            if role == 'live': stop.set()
 
     def close(self):
         with self.condition:
@@ -95,8 +123,9 @@ def native_arguments(config, model):
     args = ['riko-native', '--model', str(model),
         '--parallel', str(config.parallel_slots), '--ctx-size', str(context_capacity(config)),
         '--kv-unified' if config.kv_unified else '--no-kv-unified', '--cont-batching', '--jinja', '--slots', '--no-context-shift',
-        '--n-gpu-layers', str(config.n_gpu_layers), '--batch-size', str(config.n_batch),
-        '--ubatch-size', str(config.n_ubatch), '--flash-attn', 'on' if config.flash_attn else 'off',
+        # -1 lets llama.cpp's --fit lower the layer count to keep 1 GiB of GPU memory free; any other value is exact.
+        '--n-gpu-layers', str(config.n_gpu_layers), '--fit', 'on' if config.n_gpu_layers == -1 else 'off',
+        '--batch-size', str(config.n_batch), '--ubatch-size', str(config.n_ubatch), '--flash-attn', flash_attention(config.flash_attn),
         '--cache-type-k', config.type_k, '--cache-type-v', config.type_v,
         '--main-gpu', str(config.main_gpu), '--split-mode', config.split_mode,
         '--cache-ram', str(config.cache_size_mb), '--seed', str(config.seed)]
@@ -117,55 +146,47 @@ class InferenceLane:
     def count_tokens(self, messages): return self.owner.count_tokens(messages)
 
 
-class LlamaContextProvider(InferenceLane):
-    supports_latent_probe = True
+_FINGERPRINTS, _FINGERPRINT_LOCK = {}, threading.Lock()
+
+
+def fingerprint(paths, *, names=False):
+    """SHA-256 of the files' bytes in order (each preceded by its name when names), cached for this process by every
+    file's (path, size, mtime): an identity hashes a multi-GB GGUF once, and a changed file is hashed again."""
+    paths = list(paths)
+    def stamp(): return tuple((str(path), stat.st_size, stat.st_mtime_ns) for path in paths for stat in [path.stat()])
+    key = (names, stamp())
+    with _FINGERPRINT_LOCK: known = _FINGERPRINTS.get(key)
+    if known: return known
+    digest = hashlib.sha256()
+    for path in paths:
+        if names: digest.update(path.name.encode())
+        with path.open('rb') as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''): digest.update(chunk)
+    value = digest.hexdigest()
+    if stamp() == key[1]:  # not rewritten while it was read
+        with _FINGERPRINT_LOCK: _FINGERPRINTS[key] = value
+    return value
+
+
+class LlamaContextProvider(InferenceLane, BaseProvider):
+    transport = 'Native llama.cpp'  # names the transport in errors
+    missing_route_hint = ' Rebuild the compatible riko-native library with Responses support.'
     def __init__(self, config):
-        validate_runtime(config)
-        context_capacity(config)
-        if not config.n_ctx: raise ValueError('Native llama.cpp requires explicit per-slot runtime.n_ctx > 0')
+        validate_slots(config)
+        if not config.n_ctx: raise ValueError('llama.cpp requires explicit per-slot runtime.n_ctx > 0')
         super().__init__(self, 'live')
         self.config = config
+        self.capabilities = ProviderCapabilities(slots=config.parallel_slots, exact_tokens=True)
         self.scheduler = SlotScheduler(config.parallel_slots, pause_background=config.pause_background_on_live)
         self.start_lock = threading.Lock()
         self.client = None
         self.closed = False
         self.initiative = InferenceLane(self, 'initiative')
         self.reflection = InferenceLane(self, 'reflection')
-        self.reflection_parallelism = config.parallel_slots - 1
-        self.probe_factory = None
-        self.probe = None
+        self.observers = []  # GenerationObservers, added before the first request
 
-    def probe_idle(self):
-        with self.scheduler.condition:
-            available=not self.scheduler.foreground and not self.scheduler.active and not self.scheduler.waiting
-        return available and getattr(self,'expression_idle',lambda:True)()
-
-    def _initialize_probe(self, model):
-        if not self.probe_factory or self.probe: return
-        from ..emotion.probe import FEATURE_VERSION
-        response = self.client.get('/props')
-        self._check_response(response)
-        props = response.json()
-        if props.get('riko_emotion_probe') != FEATURE_VERSION:
-            raise RuntimeError('Emotion probe requires a compatible riko-native library with hidden-state capture')
-        digest = hashlib.sha256()
-        # Include all split shards, not just the first file.
-        files = [model]
-        import re
-        split = re.fullmatch(r'(.*)-00001-of-(\d{5})\.gguf', model.name)
-        if split:
-            files = [model.with_name(f'{split[1]}-{i:05d}-of-{split[2]}.gguf') for i in range(1, int(split[2]) + 1)]
-        for path in files:
-            with path.open('rb') as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b''): digest.update(chunk)
-        identity = {'gguf_sha256': digest.hexdigest(), 'server_build': props.get('build_info'),
-            'chat_template': props.get('chat_template'), 'feature_version': FEATURE_VERSION,
-            'type_k': self.config.type_k, 'type_v': self.config.type_v,
-            'flash_attn': self.config.flash_attn, 'n_ctx': self.config.n_ctx,
-            'runtime_fingerprint': self._probe_runtime_fingerprint()}
-        self.probe = self.probe_factory(identity, self.probe_idle)
-
-    def _probe_runtime_fingerprint(self): return None
+    @property
+    def lanes(self): return {'live': self, 'initiative': self.initiative, 'reflection': self.reflection}
 
     def set_foreground(self, active): self.scheduler.set_foreground(active)
 
@@ -176,19 +197,25 @@ class LlamaContextProvider(InferenceLane):
     def _start(self):
         raise NotImplementedError('Native transport must initialize the model context')
 
+    def _notify(self, method, *args):
+        for observer in self.observers:
+            try: getattr(observer, method)(*args)
+            except Exception: logger.exception('Generation observer %s failed in %s', type(observer).__name__, method)
+
     def _generate(self, role, messages, *, tools=None, **options):
         queued_at = time.perf_counter()
         self._start()
         cancelled = options.get('cancelled', lambda: False)
         with self.scheduler.lease(role, cancelled) as (slot, stop):
             leased_at = time.perf_counter()
+            def stopped(): return stop.is_set() or cancelled() or self.closed
             def check():
-                if stop.is_set() or cancelled() or self.closed: raise BackgroundPreempted('Inference preempted/cancelled')
+                if stopped(): raise BackgroundPreempted('Inference preempted/cancelled')
             check()
-            group = options.get('emotion_turn_id') or str(uuid.uuid4())
-            if self.probe and role == 'live': self.probe.activate(group)
+            generation = Generation(role, slot, options.get('emotion_turn_id') or str(uuid.uuid4()), stopped)
             from .responses import response_input, response_tools, template_messages, assemble_responses, sse_events
-            ceiling = self.config.n_ctx if role == 'live' else getattr(self.config, role + '_n_ctx', 4096)
+            ceiling = {'live': self.config.n_ctx, 'probe_replay': self.config.n_ctx, 'initiative': self.config.initiative_n_ctx,
+                'reflection': self.config.reflection_n_ctx}[role]
             limit = options.get('context_limit', ceiling)
             if limit > ceiling: raise ValueError(f'{role} context exceeds the server allocation ({ceiling}); restart Python after changing budgets')
             formatted = template_messages(messages)
@@ -203,47 +230,40 @@ class LlamaContextProvider(InferenceLane):
                 finished = threading.Event()
                 def watch():
                     while not finished.wait(.05):
-                        if stop.is_set() or cancelled() or self.closed:
+                        if stopped():
                             try: client.close()
                             except Exception: pass
                             return
                 threading.Thread(target=watch, daemon=True, name='slot-cancellation').start()
+                self._notify('on_start', generation)
                 try:
                     # Tokenizer/template preflight is not inference; it shares this
                     # request's cancellable transport, including before first token.
                     from .context_budget import pack_context
+                    probes = []
                     def count(value):
                         check()
+                        probes.append(len(value))
                         rendered = client.post('/apply-template', json={'messages': [m.as_dict() for m in template_messages(value)], 'tools': tools or [], 'add_generation_prompt': True})
                         self._check_response(rendered)
                         tokenized = client.post('/tokenize', json={'content': rendered.json()['prompt'], 'add_special': True, 'parse_special': True})
                         self._check_response(tokenized)
                         return len(tokenized.json()['tokens'])
-                    packed = pack_context(messages, count, limit, payload['max_output_tokens'], cancelled=lambda: stop.is_set() or cancelled() or self.closed)
-                    logger.debug('Inference preflight provider=%s role=%s slot=%s wait_s=%.3f context_pack_s=%.3f messages=%s context_limit=%s',
-                        type(self).__name__, role, slot, leased_at-queued_at, time.perf_counter()-leased_at, len(packed), limit)
+                    packed = pack_context(messages, count, limit, payload['max_output_tokens'], cancelled=stopped,
+                        state=options.get('context_state'))
+                    logger.debug('Inference preflight provider=%s role=%s slot=%s wait_s=%.3f context_pack_s=%.3f token_counts=%s counted_messages=%s messages=%s context_limit=%s',
+                        type(self).__name__, role, slot, leased_at-queued_at, time.perf_counter()-leased_at, len(probes), sum(probes), len(packed), limit)
                     payload['input'] = response_input(template_messages(packed))
+                    generation.messages = packed
                     with client.stream('POST', '/v1/responses', json=payload) as response:
                         self._check_response(response)
                         def chunks():
                             visible = ''
-                            last_user = next((m.content for m in reversed(packed) if m.role == 'user'), '')
                             for event in sse_events(response.iter_lines()):
                                 check()
                                 if event.get('timings') and options.get('on_metrics'): options['on_metrics'](event['timings'])
                                 if event.get('type') == 'response.output_text.delta': visible += event.get('delta') or ''
-                                elif event.get('type') == 'riko.emotion_probe.sample' and self.probe and role == 'live':
-                                    from ..emotion.probe import FEATURE_VERSION
-                                    features = event.get('features')
-                                    if (event.get('feature_version') == FEATURE_VERSION and visible
-                                        and event.get('prefix_bytes') == len(visible.encode('utf-8'))
-                                        and isinstance(features, list) and len(features) == 256
-                                        and all(type(n) in (int, float) and math.isfinite(n) for n in features)):
-                                        import torch
-                                        from ..conversation.output_filter import clean_output
-                                        self.probe.capture(torch.tensor(features, device='cpu'), f'user: {last_user}\nassistant: {clean_output(visible)}', group,
-                                             cancelled=lambda: stop.is_set() or cancelled() or self.closed or self.probe.active_group != group,
-                                             replay=bool(options.get('probe_replay')),input_text=last_user,offset=len(clean_output(visible)))
+                                if self.observers: self._notify('on_event', generation, event, visible)  # e.g. the probe's samples
                                 yield event
                             check()
                         result = assemble_responses(chunks(), options.get('on_delta', lambda _: None), on_reasoning=options.get('on_reasoning'))
@@ -253,13 +273,15 @@ class LlamaContextProvider(InferenceLane):
                 except Exception:
                     check()
                     raise
-                finally: finished.set()
+                finally:
+                    finished.set()
+                    self._notify('on_finish', generation)
 
     def _inference_client(self):
         raise NotImplementedError('Native transport must provide a request client')
 
-    @staticmethod
-    def _check_response(response):
+    @classmethod
+    def _check_response(cls, response):
         if response.is_success: return
         response.read()
         try:
@@ -267,30 +289,8 @@ class LlamaContextProvider(InferenceLane):
             error = body.get('error', body)
             detail = error.get('message', str(error)) if isinstance(error, dict) else str(error)
         except (ValueError, AttributeError): detail = response.text
-        hint = ' Rebuild the compatible riko-native library with Responses support.' if response.status_code in {404, 405, 501} else ''
-        raise RuntimeError(f'Native llama.cpp operation {response.status_code}: {str(detail).strip()[:2000]}{hint}')
-
-    def stream(self, messages, *, tools=None, **options):
-        output = queue.Queue(maxsize=128)
-        stopped = threading.Event()
-        cancelled = options.pop('cancelled', lambda: False)
-        def emit(item):
-            while not stopped.is_set():
-                try: output.put(item, timeout=.1); return
-                except queue.Full: pass
-        def run():
-            try: self.generate(messages, tools=tools, on_delta=emit,
-                cancelled=lambda: stopped.is_set() or cancelled(), **options)
-            except BaseException as exc: emit(exc)
-            finally: emit(None)
-        threading.Thread(target=run, daemon=True, name='live-stream').start()
-        try:
-            while True:
-                item = output.get()
-                if item is None: return
-                if isinstance(item, BaseException): raise item
-                yield item
-        finally: stopped.set()
+        hint = cls.missing_route_hint if response.status_code in {404, 405, 501} else ''
+        raise RuntimeError(f'{cls.transport} operation {response.status_code}: {str(detail).strip()[:2000]}{hint}')
 
     def count_tokens(self, messages):
         self._start()
@@ -318,5 +318,4 @@ class LlamaContextProvider(InferenceLane):
     def close(self):
         self.closed = True
         self.scheduler.close()
-        if self.probe: self.probe.close()
         if self.client: self.client.close()

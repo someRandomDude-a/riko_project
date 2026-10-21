@@ -1,0 +1,42 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {EventEmitter} from 'node:events';
+import {createRequire} from 'node:module';
+import {settle,PRIMARY} from './electron_fakes.mjs';
+const {processTelemetry,displayTelemetry}=createRequire(import.meta.url)('../desktop_telemetry.cjs');
+test('Electron processes reach the backend only when they change, forced on request, and empty as main quits',async()=>{
+ const posted=[];let fail=false,metrics=[{pid:1,type:'Browser'},{pid:2,type:'Tab'}];
+ const app=Object.assign(new EventEmitter(),{isReady:()=>true,getAppMetrics:()=>metrics,whenReady:()=>Promise.resolve()});
+ const processes=processTelemetry({app,request:(route,init)=>{posted.push([route,init.method,JSON.parse(init.body)]);return fail?Promise.reject(new Error('down')):Promise.resolve({ok:true});}});
+ processes.publish();processes.publish();await settle();
+ assert.deepEqual(posted,[['/api/resources/electron','POST',{processes:[{pid:1,kind:'Browser'},{pid:2,kind:'Utility'}]}]]);
+ processes.publish(true);await settle();assert.equal(posted.length,2,'forced');
+ fail=true;metrics=[{pid:3,type:'GPU'}];processes.publish();await settle();processes.publish();await settle();
+ assert.equal(posted.length,4,'a failed post is retried on the next change check');
+ fail=false;processes.publish(true,true);await settle();assert.deepEqual(posted.at(-1)[2],{processes:[]});
+ const watched=processTelemetry({app,request:()=>{posted.push('watch');return Promise.resolve({ok:true});}});watched.watch();
+ const contents=new EventEmitter();app.emit('web-contents-created',{},contents);
+ for(const event of ['did-finish-load','destroyed','render-process-gone'])assert.equal(contents.listenerCount(event),1,event);
+ assert.deepEqual(['gpu-info-update','child-process-gone'].map(event=>app.listenerCount(event)),[1,1]);
+ const early=processTelemetry({app:{...app,isReady:()=>false},request:()=>assert.fail('before ready')});early.publish(true);
+});
+test('displays are sent once per change, retried after a failure, and again whenever the backend lost them',async()=>{
+ const posted=[];let ok=true,resolve;
+ const screen={getAllDisplays:()=>[PRIMARY,{id:7,label:'',bounds:{x:1920,y:0,width:800,height:600},scaleFactor:1}],getPrimaryDisplay:()=>PRIMARY};
+ const displays=displayTelemetry({screen,request:(route,init)=>{posted.push([route,JSON.parse(init.body)]);return new Promise(r=>{resolve=()=>r({ok});});}});
+ assert.deepEqual(displays.list(),[{index:0,id:1,label:'Built-in',primary:true,bounds:PRIMARY.bounds,scaleFactor:2},{index:1,id:7,label:'Screen 2',primary:false,bounds:{x:1920,y:0,width:800,height:600},scaleFactor:1}]);
+ const first=displays.publish();displays.publish();resolve();await first;
+ assert.equal(posted.length,1,'one request in flight');assert.equal(posted[0][0],'/api/displays');
+ await displays.publish();assert.equal(posted.length,1,'unchanged');
+ displays.reset();const again=displays.publish();ok=false;resolve();await again;assert.equal(posted.length,2);
+ const retry=displays.publish();ok=true;resolve();await retry;assert.equal(posted.length,3,'a refused post is sent again');
+});
+test('a display change that arrives while a post is in flight is sent once that post ends',async()=>{
+ const posted=[],pending=[];let all=[PRIMARY];
+ const screen={getAllDisplays:()=>all,getPrimaryDisplay:()=>PRIMARY};
+ const displays=displayTelemetry({screen,request:(route,init)=>{posted.push(JSON.parse(init.body).length);return new Promise(r=>pending.push(()=>r({ok:true})));}});
+ const first=displays.publish();all=[PRIMARY,{id:7,label:'Side',bounds:{x:1920,y:0,width:800,height:600},scaleFactor:1}];displays.publish();
+ assert.deepEqual(posted,[1],'one request in flight');
+ pending.shift()();await settle();assert.deepEqual(posted,[1,2],'the newer list follows');pending.shift()();await first;
+ displays.publish();await settle();assert.deepEqual(posted,[1,2],'then nothing until the next change');
+});

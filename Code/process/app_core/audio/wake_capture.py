@@ -1,6 +1,8 @@
 """Small VAD recorder shared by wake enrollment and live phrase matching."""
 from collections import deque
 
+from ..kernel.audio_config import SAMPLE_RATE
+
 
 class WakeCapture:
     def __init__(self, max_seconds=5.0, silence_seconds=0.32):
@@ -11,7 +13,7 @@ class WakeCapture:
         self.pre_roll = deque(maxlen=4)
 
     def feed(self, frame, speaking):
-        self.elapsed += len(frame) / 32000
+        self.elapsed += len(frame) / (SAMPLE_RATE * 2)
         # Deadline takes precedence over endpoint: never enroll a timed-out clip.
         if self.elapsed >= self.max_seconds:
             self.frames.clear()
@@ -23,7 +25,7 @@ class WakeCapture:
             self.started = True
             self.frames.extend(self.pre_roll)
         self.frames.append(frame)
-        self.silence = 0.0 if speaking else self.silence + len(frame) / 32000
+        self.silence = 0.0 if speaking else self.silence + len(frame) / (SAMPLE_RATE * 2)
         if self.silence >= self.silence_seconds:
             return 'complete', b''.join(self.frames)
         return None, None

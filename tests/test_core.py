@@ -1,6 +1,6 @@
 
 from process.app_core.conversation.chat import ChatService
-from process.app_core.conversation.messages import ChatMessage, ModelResponse, ToolCall
+from process.app_core.kernel.messages import ChatMessage, ModelResponse, ToolCall
 from process.app_core.tools.registry import ToolRegistry
 
 
@@ -18,8 +18,7 @@ class FakeProvider:
 class AddTool:
     TOOL_NAME = "add"
     TOOL_DESCRIPTION = "Add two numbers"
-    def _call(self, a: int, b: int): return a + b
-    def execute(self, **kwargs): return self._call(**kwargs)
+    def execute(self, a: int, b: int): return a + b
 
 
 def test_tool_loop():

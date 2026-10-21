@@ -8,3 +8,6 @@ export class AvatarHover{
  constructor(){this.target=null;this.since=0;this.delayed=false;}
  update(target,now,delay){const events=[];if(target?.bone!==this.target?.bone){if(this.target)events.push({kind:'leave',target:this.target});this.target=target;this.since=now;this.delayed=false;if(target)events.push({kind:'hover',target});}if(target&&!this.delayed&&now-this.since>=delay){this.delayed=true;events.push({kind:'hoverDelayed',target:this.target});}return events;}
 }
+/** Which of one update's hover events the backend hears: all of them, except the 'leave' of a move from one bone straight to another
+ * (the 'hover' says it; a leave would drop the pointer there for a moment). Local hit rules still see every event. */
+export const hoverReported=events=>{const moved=events.some(event=>event.kind==='hover');return events.map(event=>!(moved&&event.kind==='leave'));};

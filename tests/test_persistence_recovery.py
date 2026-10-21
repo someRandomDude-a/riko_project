@@ -11,10 +11,11 @@ import pytest
 from process.app_core.persistence.conversation_store import ConversationStore
 from process.app_core.desktop.state import DesktopState
 from process.app_core.events.bus import RuntimeEvent
-from process.app_core.runtime.lifecycle import close_bounded
-from process.app_core.conversation.messages import ChatMessage
+from process.app_core.kernel.lifecycle import close_bounded
+from process.app_core.kernel.messages import ChatMessage
 from process.app_core.tools.registry import RegisteredTool, ToolRegistry
-from process.app_core.runtime.workers import DaemonExecutor
+from process.app_core.kernel.workers import DaemonExecutor
+from process.app_core.inference.provider import BaseProvider
 
 
 def test_archive_pages_sessions_and_interrupted_text_survive_restart(tmp_path):
@@ -70,13 +71,14 @@ def test_board_content_pages_bounds_and_geometry_survive_restart(tmp_path):
     board.surface_result('whiteboard',command,'rendered',bounds={'x':40,'y':40,'width':436,'height':240})
     board.update_geometry('whiteboard',width=1000)
     restored=DesktopState();restored.configure_board_store(path)
-    assert restored.whiteboard_page=='page-2'
-    assert restored.whiteboard[0].bounds['height']==240
-    assert restored.whiteboard[0].status=='queued' # Renderer must confirm again.
-    assert restored.whiteboard_geometry['width']==1000
+    saved=restored.snapshot()
+    assert saved['whiteboard_page']=='page-2'
+    assert saved['whiteboard'][0]['bounds']['height']==240
+    assert saved['whiteboard'][0]['status']=='queued' # Renderer must confirm again.
+    assert saved['whiteboard_geometry']['width']==1000
     restored.clear_whiteboard()
     third=DesktopState();third.configure_board_store(path)
-    assert third.whiteboard==[]
+    assert third.snapshot()['whiteboard']==[]
 
 
 def test_corrupt_board_preserved_and_recovery_file_resumes(tmp_path):
@@ -85,7 +87,7 @@ def test_corrupt_board_preserved_and_recovery_file_resumes(tmp_path):
     board.add_whiteboard('text',{'text':'Recovered board'})
     assert path.read_text()=='damaged'
     restored=DesktopState();restored.configure_board_store(path)
-    assert restored.whiteboard[0].payload['text']=='Recovered board'
+    assert restored.snapshot()['whiteboard'][0]['payload']['text']=='Recovered board'
 
 
 def test_daemon_worker_shutdown_cancels_queued_jobs():
@@ -102,7 +104,7 @@ def test_daemon_worker_shutdown_cancels_queued_jobs():
 
 def test_hung_worker_does_not_keep_python_process_alive():
     script='''import time, threading
-from process.app_core.runtime.workers import DaemonExecutor
+from process.app_core.kernel.workers import DaemonExecutor
 started=threading.Event()
 def stuck():
  started.set()
@@ -129,13 +131,12 @@ def test_factory_rolls_back_resources_after_partial_construction_failure(tmp_pat
     from process.app_core import factory
     from process.app_core.configuration.config import AppConfig
     closed=[]
-    monkeypatch.setattr(factory,'create_provider',lambda config:SimpleNamespace(close=lambda:closed.append('provider')))
-    monkeypatch.setattr(factory.ToolRegistry,'from_config',lambda config:SimpleNamespace(
-        register_mcp=lambda client:None, close=lambda:closed.append('registry')))
+    provider=BaseProvider();provider.close=lambda:closed.append('provider')
+    monkeypatch.setattr(factory,'create_provider',lambda config:provider)
+    monkeypatch.setattr(factory.ToolRegistry,'from_config',lambda config, activity=None, local_tools=None:SimpleNamespace(
+        register_mcp=lambda client,**keys:None, close=lambda:closed.append('registry')))
     def fail(*args,**kwargs): raise RuntimeError('memory failure')
     monkeypatch.setattr(factory,'MemoryStore',fail)
-    # Keep one shared desktop state for the factory's effect-directory lookups.
-    state=SimpleNamespace();monkeypatch.setattr(factory,'get_desktop_state',lambda:state)
     config=AppConfig(root=tmp_path)
     with pytest.raises(RuntimeError,match='memory failure'): factory.create_chat_service(config)
     assert closed==['registry','provider']
@@ -149,6 +150,27 @@ def test_timed_out_shared_tool_blocks_duplicate_retry():
         assert registry.execute('slow',{}).is_error
         assert 'retry blocked' in registry.execute('slow',{}).content
     finally: release.set();registry.close()
+
+
+def test_isolated_tool_round_trips_non_ascii_through_ansi_code_page_pipes(tmp_path,monkeypatch):
+    # Windows pipes use the ANSI code page unless Python runs in UTF-8 mode; cp1252 cannot encode todo_list's emoji
+    # and writes bytes such as 0xE9 that are not UTF-8.
+    (tmp_path/'unicode_tool.py').write_text('''import sys
+class Tool:
+ def __init__(self,config,context): pass
+ def execute(self,**args):
+  sys.stderr.buffer.write(b'caf\\xe9 warning\\n'); sys.stderr.flush()
+  return '\\u2705 Added task: ' + args['task']
+''')
+    monkeypatch.setenv('PYTHONPATH',str(tmp_path))
+    monkeypatch.setenv('PYTHONIOENCODING','cp1252')
+    registry=ToolRegistry(timeout_seconds=30)
+    registry.tools['unicode']=RegisteredTool('unicode','',{},None,isolated={'module':'unicode_tool','class':'Tool','config':{}})
+    try:
+        result=registry.execute('unicode',{'task':'Caf\u00e9 \u2014 \U0001F95B'})
+        assert not result.is_error, result.content
+        assert result.content=='\u2705 Added task: Caf\u00e9 \u2014 \U0001F95B'
+    finally: registry.close()
 
 
 def test_isolated_tool_is_killed_at_deadline(tmp_path,monkeypatch):
@@ -169,5 +191,5 @@ class Tool:
         result=registry.execute('isolated',{})
         assert result.is_error and 'terminated' in result.content
         assert marker.read_text()=='started'
-        assert not registry._processes
+        assert not registry.workers.processes
     finally: registry.close()

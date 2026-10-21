@@ -1,0 +1,83 @@
+name: CI
+# Every push and pull request: the whole Python suite on each OS a release ships for, and the Electron tests and build.
+# Every GPU, audio device and native library is mocked here; .github/workflows/native-smoke.yml loads a real build.
+on:
+  push:
+    branches: ['**']  # not tags: a v* tag runs the release workflow
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  # A newer push to the same branch or pull request replaces a run still in progress.
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}  # a push and its pull request share one run
+  cancel-in-progress: true
+jobs:
+  python:
+    name: Python tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # The release workflow's runners: Windows and Linux x64, Apple silicon macOS.
+        os: [ubuntu-22.04, windows-2022, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        # bash -eo pipefail stops a step at its first failing command; Windows' default pwsh checks only the last one.
+        shell: bash
+    env:
+      # No Hugging Face downloads: tests/conftest.py already refuses Julia-1's, and this catches any other model.
+      HF_HUB_OFFLINE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: tools/release/requirements-lock*.txt
+      - name: Linux audio libraries
+        # sounddevice loads PortAudio when imported (tests/test_release_build.py runs the release check's imports).
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2 libsndfile1
+      - name: Python dependencies
+        # The release's hash-locked versions (tools/release/lock.py), so CI tests what a release freezes; torch is the CPU build.
+        run: |
+          python -m pip install --require-hashes -r tools/release/requirements-lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --require-hashes --no-deps -r tools/release/requirements-lock-no-deps.txt
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - name: Electron packages for the cross-language tests
+        # tests/test_settings_store.py runs electron/release.cjs's first-run setup in Node and validates what it writes; it
+        # skips without electron/node_modules. Only the JavaScript packages are needed, not the Electron binary.
+        working-directory: electron
+        run: npm ci --ignore-scripts
+      - name: Python tests
+        # --timeout (pytest-timeout, in the lock) fails a deadlocked test after 5 minutes instead of hanging the job;
+        # the whole suite takes well under a minute on a developer machine.
+        run: python -m pytest -q --timeout=300 -rfEs
+
+  electron:
+    name: Electron tests and build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: electron
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - run: npm ci
+      - name: Main and preload syntax
+        run: |
+          node --check main.cjs
+          node --check preload.cjs
+      - run: npm test
+      - run: npm run build

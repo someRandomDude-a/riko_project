@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from process.app_core.conversation.output_filter import OutputFilter, clean_output
+from process.app_core.kernel.output_filter import OutputFilter, clean_output
 from process.app_core.conversation.chat import ChatService
-from process.app_core.conversation.messages import ChatMessage, ModelResponse
+from process.app_core.kernel.messages import ChatMessage, ModelResponse
 
 
 @pytest.mark.parametrize('stamp', ['[2026-10-01T14:30]', '[2026-10-01 14:30:10+05:30]',

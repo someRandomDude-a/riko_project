@@ -1,21 +1,16 @@
 from abc import ABC, abstractmethod
-from enum import Enum
 from typing import Any, Dict, Optional
 import inspect
 
 
-class ToolType(str, Enum):
-    FUNCTION = "function"
-    RESOURCE = "resource"
-    PROMPT_ONLY = "prompt_only"
-
-
 class BaseTool(ABC):
-    # Metadata (override in subclasses)
+    """A built-in tool. The registry describes it by input_schema (from _call's signature) and runs each call in a
+    disposable worker (tools/isolation.py) that imports only the subclass's module, so subclasses keep their imports light."""
     TOOL_NAME: str = ""
     TOOL_DESCRIPTION: str = ""
-    TOOL_TYPE: ToolType = ToolType.FUNCTION
-    MCP_PROMPT: str = ""   # Detailed usage instructions for the LLM
+    CHOICES: Dict[str, list] = {}
+    ISOLATED = True  # explicit, not inferred from where the module lives: run in a worker under any import root
+    READ_ONLY = False  # declares that it never changes its environment (MCP readOnlyHint), so initiative may call it too
 
     def __init__(self, config: Dict[str, Any], context: Optional[Dict[str, Any]] = None):
         self.config = config
@@ -25,6 +20,15 @@ class BaseTool(ABC):
     def _setup(self):
         """Override for initialization (e.g., API key validation)."""
         pass
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        from ..schema import signature_schema  # here, not at import: the worker loads only base.py and the tool's module
+        return signature_schema(self._call, self.CHOICES)
+
+    def worker_request(self) -> Dict[str, Any]:
+        """What tools/worker.py rebuilds this tool from in its own process."""
+        return {'module': type(self).__module__, 'class': type(self).__name__, 'config': self.config, 'context': self.context}
 
     # Public entry point - not meant to be overridden
     def execute(self, **kwargs) -> Any:
@@ -69,75 +73,5 @@ class BaseTool(ABC):
         """
         pass
 
-    # MCP-compatible tool definition
-    def to_mcp_definition(self) -> Dict[str, Any]:
-        """Generate a tool definition from the _call signature."""
-        sig = inspect.signature(self._call)
-        params = sig.parameters
-        properties = {}
-        required = []
-
-        for name, param in params.items():
-            if name == "self":
-                continue
-            # Determine JSON Schema type from type annotation
-            type_hint = param.annotation
-            if type_hint is inspect.Parameter.empty:
-                json_type = "string"
-            else:
-                # Map Python types to JSON Schema
-                if type_hint in (str, bytes):
-                    json_type = "string"
-                elif type_hint is int:
-                    json_type = "integer"
-                elif type_hint is float:
-                    json_type = "number"
-                elif type_hint is bool:
-                    json_type = "boolean"
-                elif type_hint is list:
-                    json_type = "array"
-                elif type_hint is dict:
-                    json_type = "object"
-                else:
-                    json_type = "string"
-
-            properties[name] = {
-                "type": json_type,
-                "description": f"Parameter: {name}"
-            }
-
-            if param.default is inspect.Parameter.empty:
-                required.append(name)
-
-        return {
-            "name": self.TOOL_NAME,
-            "description": self.TOOL_DESCRIPTION,
-            "inputSchema": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
-        }
-
-    # LLM-friendly prompt builder
-    def build_prompt_context(self) -> str:
-        """Generate an LLM-readable prompt section for this tool."""
-        if self.MCP_PROMPT:
-            return self.MCP_PROMPT
-
-        # Auto-generate from metadata and signature
-        lines = [f"{self.TOOL_NAME}: {self.TOOL_DESCRIPTION}"]
-        lines.append(f"  Type: {self.TOOL_TYPE.value}")
-        sig = inspect.signature(self._call)
-        params = sig.parameters
-        if params:
-            lines.append("  Parameters:")
-            for name, param in params.items():
-                if name == "self":
-                    continue
-                default = "" if param.default is inspect.Parameter.empty else f" (default: {param.default})"
-                lines.append(f"    - {name}{default}")
-        return "\n".join(lines)
-
     def __repr__(self):
-        return f"<{self.TOOL_TYPE.value}:{self.TOOL_NAME}>"
+        return f"<tool:{self.TOOL_NAME}>"

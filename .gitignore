@@ -1,3 +1,5 @@
+# Legacy names, unanchored on purpose: earlier releases wrote these at the repository root or the working directory, and
+# a data root (RIKO_DATA_DIR) may be any folder inside the checkout, so they match at any depth.
 chat_history.json
 GPT-SoVITS-v3lora-20250228
 /GPT-SoVITS-v2pro-20250604-nvidia50/
@@ -41,13 +43,42 @@ output.wav
 /models/training/expression/
 /models/*/expression probe/
 /logs/
+debug.log*
+backend-launch.log*
 /release-stage/
 /release-build/
 /persistent_memories/discord_access.json
+# Per-start backend secrets, wherever the data root is (and their write temporaries).
+**/persistent_memories/api_token
+**/persistent_memories/confirm_key
+**/persistent_memories/.api_token.*.tmp
+**/persistent_memories/.confirm_key.*.tmp
+# Kept copies of unreadable or repaired user files, and writes a killed process left (persistence/preserve.py, atomic.py).
+**/persistent_memories/*.unreadable-*
+**/persistent_memories/.*.tmp
 /.native/
-/character_config.yaml.previous
-/.settings-save-*
-/.settings-validation-*
+# Copies of character_config.yaml (it may hold API keys): the backup Settings keeps and its write temporaries, wherever the
+# data root is.
+character_config.yaml.previous
+.character_config.yaml.previous.*.tmp
+.settings-save-*
+.settings-validation-*
+.resource-estimate-*
 /effects
 /docs
-/character_files
+# Character assets are user files (avatars, voices, animations). Ignore the folder's contents, not the folder, so the
+# tracked default TTS reference below can be re-included (git never re-includes a file under an excluded directory).
+/character_files/*
+!/character_files/main_sample.wav
+# The data root's user files (DataPaths, configuration/paths.py). persistent_memories/ is user data at any depth (a data
+# root may be a folder inside the checkout): only the checkout's own README is tracked.
+**/persistent_memories/*
+!/persistent_memories/README.md
+mcp.json
+/.env.*
+!/.env.discord.example
+/models/
+/wake_words/
+/*.tmp
+# A literal '~' folder: earlier releases left an unexpanded ~ in tasks.store_file, and that store stays where it is.
+/~/

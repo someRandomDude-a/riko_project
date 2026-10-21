@@ -51,9 +51,17 @@ def test_fallback_and_invalid_teacher_never_become_labels():
 
 
 @pytest.mark.parametrize('raw', [{'interval_tokens': 0}, {'rank': True}, {'min_agreement': float('nan')},
-    {'hidden_units': [100000, 5]}, {'enabled': 'yes'}, {'unknown': 1}, {'min_samples': 1}])
+    {'hidden_units': [100000, 5]}, {'enabled': 'yes'}, {'min_samples': 1}])
 def test_probe_config_rejects_invalid_values(raw):
     with pytest.raises(ValueError): ProbeConfig.from_raw(raw)
+
+
+def test_an_unknown_probe_key_keeps_its_default_and_is_reported_not_fatal(tmp_path):
+    from process.app_core.configuration.config import load_config
+    assert ProbeConfig.from_raw({'unknown_probe_knob': 1, 'rank': 8}) == ProbeConfig(rank=8)
+    path = tmp_path / 'character_config.yaml'
+    path.write_text('emotion:\n  probe:\n    unknown_probe_knob: 1\n', encoding='utf-8')
+    assert load_config(path).unknown_settings == ('emotion.probe.unknown_probe_knob',)
 
 
 def test_default_width_has_tens_of_thousands_of_units_not_dense_connections():

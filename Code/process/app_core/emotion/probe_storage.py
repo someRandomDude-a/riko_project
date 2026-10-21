@@ -1,9 +1,10 @@
-"""Per-model expression datasets, with read-only discovery of legacy storage."""
+"""Per-model expression datasets, with read-only discovery of legacy storage. paths: the DataPaths (configuration/paths.py)
+the datasets live under (models/, and persistent_memories/emotion_probes/ from earlier releases)."""
 from pathlib import Path
 import re
 
 
-def probe_directory(root, runtime):
+def probe_directory(paths, runtime):
     if runtime.model_path:
         name = Path(runtime.model_path).stem
     else:
@@ -12,16 +13,14 @@ def probe_directory(root, runtime):
     if name.split('.')[0].upper() in {'CON', 'PRN', 'AUX', 'NUL',
             *(f'COM{i}' for i in range(1, 10)), *(f'LPT{i}' for i in range(1, 10))}:
         name = '_' + name
-    return Path(root) / 'models' / name / 'expression probe'
+    return Path(paths.models) / name / 'expression probe'
 
 
-def corpus_files(root):
-    root = Path(root)
-    seen = set()
-    for pattern in ('models/training/expression/*/*/examples.json',
-            'models/*/expression probe/*/examples.json',
-            'persistent_memories/emotion_probes/*/examples.json'):
-        for path in sorted(root.glob(pattern)):
+def corpus_files(paths):
+    root, seen = Path(paths.root), set()
+    for folder, pattern in ((paths.models, 'training/expression/*/*/examples.json'), (paths.models, '*/expression probe/*/examples.json'),
+            (paths.emotion_probes, '*/examples.json')):
+        for path in sorted(Path(folder).glob(pattern)):
             key = path.parent.name
             if not re.fullmatch(r'[0-9a-f]{64}', key) or key in seen: continue
             if not path.resolve().is_relative_to(root.resolve()): continue
@@ -29,6 +28,6 @@ def corpus_files(root):
             yield path
 
 
-def training_directory(root, runtime):
-    name = probe_directory(root, runtime).parent.name
-    return Path(root) / 'models' / 'training' / 'expression' / name
+def training_directory(paths, runtime):
+    name = probe_directory(paths, runtime).parent.name
+    return Path(paths.models) / 'training' / 'expression' / name

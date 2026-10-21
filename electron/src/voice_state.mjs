@@ -1,3 +1,4 @@
+import {share} from './runtime_store.mjs';
 export const initialVoice={enabled:false,status:'stopped',phase:'stopped',wake:null,level:0,transcript:null,error:''};
 export function microphoneAction(voice){
   if(!voice.enabled)return {path:'/api/voice/start',label:'Turn on microphone',icon:'on'};
@@ -5,15 +6,17 @@ export function microphoneAction(voice){
   if(awake)return {path:'/api/voice/stop',label:'Turn off microphone',icon:'off'};
   return {path:'/api/voice/activate',label:'Speak now',icon:'speak'};
 }
+// Snapshots and voice resources repeat the same status: the state object (and every component reading it) stays when nothing changed.
+const merge=(state,changes)=>share(state,{...state,...changes});
 export function reduceVoice(state,event){
   const p=event.payload||{};
   const status=event.type==='resource.snapshot'?p.voice:event.type==='resource.voice'?p:null;
-  if(status)return {...state,enabled:!!status.capture_running||!!status.listening,status:status.microphone_status||'ready',phase:status.phase||state.phase,wake:status.wake,transcript:status.latest_transcript??state.transcript};
-  if(event.type==='state.snapshot')return {...state,enabled:!!p.runtime?.listening||p.runtime?.microphone_status==='starting',status:p.runtime?.microphone_status||state.status,phase:p.runtime?.voice_phase||state.phase,wake:p.runtime?.wake||state.wake,transcript:p.runtime?.latest_transcript??state.transcript};
+  if(status)return merge(state,{enabled:!!status.capture_running||!!status.listening,status:status.microphone_status||'ready',phase:status.phase||state.phase,wake:status.wake,transcript:status.latest_transcript??state.transcript});
+  if(event.type==='state.snapshot')return merge(state,{enabled:!!p.runtime?.listening||p.runtime?.microphone_status==='starting',status:p.runtime?.microphone_status||state.status,phase:p.runtime?.voice_phase||state.phase,wake:p.runtime?.wake||state.wake,transcript:p.runtime?.latest_transcript??state.transcript});
   if(event.type==='voice.starting')return {...state,enabled:true,status:'starting',phase:'starting',error:''};
   if(event.type==='voice.ready')return {...state,enabled:true,status:'ready',phase:state.phase==='starting'?(state.wake?.active?'awake':'waiting'):state.phase,error:''};
   if(event.type==='voice.stopped')return {...state,enabled:false,status:'stopped',phase:'stopped',level:0};
-  if(event.type==='voice.level')return {...state,level:state.enabled?Math.min(1,(p.rms||0)*8):0};
+  if(event.type==='voice.level'){const level=state.enabled?Math.min(1,(p.rms||0)*8):0;return level===state.level?state:{...state,level};}
   if(event.type==='voice.error')return {...state,error:p.error||'Microphone error'};
   if(event.type==='voice.wake_status')return {...state,wake:p};
   if(event.type==='voice.wake_score')return {...state,wake:state.wake?{...state.wake,last_score:p.score}:null};

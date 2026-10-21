@@ -164,6 +164,8 @@ nav { display:flex; gap:6px; flex-wrap:wrap; }
 .formatted-text table { border-collapse:collapse; }
 .formatted-text td, .formatted-text th { border:1px solid #ffffff25; padding:7px; }
 .formatted-text img { max-width:100%; border-radius:8px; }
+.formatted-text .image-link { text-decoration:underline dotted; }
+.formatted-text .image-alt { font-style:italic; opacity:.75; }
 .formatted-text .katex-display, .chat .formatted-text { overflow-x:auto; }
 .bubble { position:fixed; right:110px; bottom:35px; max-width:420px; max-height:80vh; overflow:auto; padding:18px 22px; border-radius:20px; background:#fffffff2; color:#201a31; box-shadow:0 10px 40px #0007; pointer-events:auto; }
 .board-shell { height:100vh; display:flex; flex-direction:column; background:#171923; }

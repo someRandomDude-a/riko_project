@@ -3,7 +3,9 @@
     "example": {
       "command": "python",
       "args": ["path/to/mcp_server.py"],
-      "env": {}
+      "env": {},
+      "inherit_env": [],
+      "require_approval": true
     },
     "remote-example": {
       "url": "http://127.0.0.1:8000/mcp",
